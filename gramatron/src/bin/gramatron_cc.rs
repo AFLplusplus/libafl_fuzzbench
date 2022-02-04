@@ -1,4 +1,4 @@
-use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses};
+use libafl_cc::{ClangWrapper, CompilerWrapper};
 use std::env;
 
 pub fn main() {
@@ -16,10 +16,6 @@ pub fn main() {
         dir.pop();
 
         let mut cc = ClangWrapper::new();
-
-        #[cfg(target_os = "linux")]
-        cc.add_pass(LLVMPasses::AutoTokens);
-
         if let Some(code) = cc
             .cpp(is_cpp)
             // silence the compiler wrapper output, needed for some configure scripts.

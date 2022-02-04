@@ -9,6 +9,7 @@ members = [
     "generic",
     "gramatron",
     "grimoire",
+    "nautilus",
 ]
 exclude = [
     "LibAFL",

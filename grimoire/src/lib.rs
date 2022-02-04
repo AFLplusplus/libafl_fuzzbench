@@ -190,7 +190,10 @@ fn run_testcases(filenames: &[&str]) {
         let input = GeneralizedInput::from_file(fname).expect("no file found");
 
         let target_bytes = input.target_bytes();
-        let bytes = target_bytes.as_slice();
+        let mut bytes = target_bytes.as_slice().to_vec();
+        if *bytes.last().unwrap() != 0 {
+            bytes.push(0);
+        }
         unsafe {
             println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
         }
