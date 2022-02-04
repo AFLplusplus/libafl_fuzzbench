@@ -8,6 +8,7 @@ debug = true
 members = [
     "generic",
     "gramatron",
+    "grimoire",
 ]
 exclude = [
     "LibAFL",

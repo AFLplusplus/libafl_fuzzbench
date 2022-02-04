@@ -15,8 +15,8 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::{
     env,
     fs::{self, File},
-    io::{self, BufReader, Read, Write},
-    path::{Path, PathBuf},
+    io::{self, Write},
+    path::PathBuf,
 };
 
 use libafl::{
@@ -26,6 +26,7 @@ use libafl::{
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider},
         tuples::tuple_list,
+        AsSlice,
     },
     corpus::{
         CachedOnDiskCorpus, Corpus, IndexesLenTimeMinimizerCorpusScheduler, OnDiskCorpus,
@@ -36,20 +37,27 @@ use libafl::{
     feedback_or,
     feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{Automaton, GramatronGenerator},
-    inputs::GramatronInput,
+    generators::{Generator, NautilusContext, NautilusGenerator},
+    inputs::{GeneralizedInput, HasTargetBytes, Input},
     monitors::SimpleMonitor,
     mutators::{
-        GramatronRandomMutator, GramatronRecursionMutator, GramatronSpliceMutator,
-        StdScheduledMutator,
+        havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
+        GrimoireRandomDeleteMutator, GrimoireRecursiveReplacementMutator,
+        GrimoireStringReplacementMutator, I2SRandReplace, Tokens,
     },
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    stages::mutational::StdMutationalStage,
-    state::{HasCorpus, StdState},
-    Error,
+    stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
+    state::{HasCorpus, HasMetadata, StdState},
+    Error, Evaluator,
 };
 
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
+use libafl_targets::{
+    libfuzzer_initialize, libfuzzer_test_one_input, CmpLogObserver, CMPLOG_MAP, EDGES_MAP,
+    MAX_EDGES_NUM,
+};
+
+#[cfg(target_os = "linux")]
+use libafl_targets::autotokens;
 
 /// The fuzzer main (as `no_mangle` C function)
 #[no_mangle]
@@ -77,6 +85,13 @@ pub fn libafl_main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::new("tokens")
+                .short('x')
+                .long("tokens")
+                .help("A file to read tokens from, to be used during fuzzing")
+                .takes_value(true),
+        )
+        .arg(
             Arg::new("timeout")
                 .short('t')
                 .long("timeout")
@@ -89,7 +104,7 @@ pub fn libafl_main() {
         Ok(res) => res,
         Err(err) => {
             println!(
-                "Syntax: {}, -o corpus_dir -g grammar.json\n{:?}",
+                "Syntax: {}, [-x dictionary] -o corpus_dir -g grammar.json\n{:?}",
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
@@ -121,7 +136,7 @@ pub fn libafl_main() {
         println!("{:?} is not a valid file!", &grammar_path);
         return;
     }
-    let automaton = read_automaton_from_file(grammar_path);
+    let context = NautilusContext::from_file(64, grammar_path);
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
@@ -136,9 +151,14 @@ pub fn libafl_main() {
             return;
         }
     }
+    let mut initial_dir = out_dir.clone();
+    initial_dir.push("initial");
+    fs::create_dir_all(&initial_dir).unwrap();
     let mut crashes = out_dir.clone();
     crashes.push("crashes");
     out_dir.push("queue");
+
+    let tokens = res.value_of("tokens").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
         res.value_of("timeout")
@@ -148,15 +168,8 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, automaton, timeout).expect("An error occurred while fuzzing");
-}
-
-fn read_automaton_from_file<P: AsRef<Path>>(path: P) -> Automaton {
-    let file = fs::File::open(path).unwrap();
-    let mut reader = BufReader::new(file);
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer).unwrap();
-    postcard::from_bytes(&buffer).unwrap()
+    fuzz(initial_dir, out_dir, crashes, context, tokens, timeout)
+        .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -174,19 +187,10 @@ fn run_testcases(filenames: &[&str]) {
     for fname in filenames {
         println!("Executing {}", fname);
 
-        let f = fs::File::open(fname).expect("Unable to open file");
-        let mut reader = BufReader::new(f);
-        let mut buffer = Vec::new();
+        let input = GeneralizedInput::from_file(fname).expect("no file found");
 
-        reader.read_to_end(&mut buffer).unwrap();
-
-        let input: GramatronInput = postcard::from_bytes(&buffer).unwrap();
-
-        let mut bytes = vec![];
-        input.unparse(&mut bytes);
-        if *bytes.last().unwrap() != 0 {
-            bytes.push(0);
-        }
+        let target_bytes = input.target_bytes();
+        let bytes = target_bytes.as_slice();
         unsafe {
             println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
         }
@@ -196,9 +200,11 @@ fn run_testcases(filenames: &[&str]) {
 
 /// The actual fuzzer
 fn fuzz(
+    initial_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
-    automaton: Automaton,
+    context: NautilusContext,
+    tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
     #[cfg(unix)]
@@ -216,6 +222,21 @@ fn fuzz(
         #[cfg(windows)]
         println!("{}", s);
     });
+
+    let mut generator = NautilusGenerator::new(&context);
+
+    let mut initial_inputs = vec![];
+    let mut bytes = vec![];
+    for i in 0..1024 {
+        let nautilus = generator.generate(&mut ()).unwrap();
+        nautilus.unparse(&context, &mut bytes);
+
+        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
+        file.write_all(&bytes).unwrap();
+
+        let input = GeneralizedInput::new(bytes.clone());
+        initial_inputs.push(input);
+    }
 
     // We need a shared map to store our state before a crash.
     // This way, we are able to continue fuzzing afterwards.
@@ -242,6 +263,9 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
+    let cmplog = unsafe { &mut CMPLOG_MAP };
+    let cmplog_observer = CmpLogObserver::new("cmplog", cmplog, true);
+
     // The state of the edges feedback.
     let feedback_state = MapFeedbackState::with_observer(&edges_observer);
 
@@ -249,7 +273,7 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, false),
+        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, true),
         // Time feedback, this one does not need a feedback state
         TimeFeedback::new_with_observer(&time_observer)
     );
@@ -273,19 +297,34 @@ fn fuzz(
         )
     });
 
+    // Read tokens
+    if state.metadata().get::<Tokens>().is_none() {
+        let mut toks = Tokens::default();
+        if let Some(tokenfile) = &tokenfile {
+            toks.add_from_file(tokenfile)?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            toks += autotokens()?;
+        }
+
+        if !toks.is_empty() {
+            state.add_metadata(toks);
+        }
+    }
+
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerCorpusScheduler::new(QueueCorpusScheduler::new());
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
+    let generalization = GeneralizationStage::new(&edges_observer);
+
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut bytes = vec![];
-    let mut harness = |input: &GramatronInput| {
-        if input.terminals().is_empty() {
-            return ExitKind::Ok;
-        }
-        input.unparse(&mut bytes);
+    let mut harness = |input: &GeneralizedInput| {
+        let target_bytes = input.target_bytes();
+        let bytes = target_bytes.as_slice();
         libfuzzer_test_one_input(&bytes);
         ExitKind::Ok
     };
@@ -302,6 +341,26 @@ fn fuzz(
         timeout,
     );
 
+    let mut tracing_harness = |input: &GeneralizedInput| {
+        let target_bytes = input.target_bytes();
+        let bytes = target_bytes.as_slice();
+        libfuzzer_test_one_input(&bytes);
+        ExitKind::Ok
+    };
+
+    // Setup a tracing stage in which we log comparisons
+    let tracing = TracingStage::new(TimeoutExecutor::new(
+        InProcessExecutor::new(
+            &mut tracing_harness,
+            tuple_list!(cmplog_observer),
+            &mut fuzzer,
+            &mut state,
+            &mut mgr,
+        )?,
+        // Give it more time!
+        timeout * 10,
+    ));
+
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
@@ -309,34 +368,37 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
-    let mut generator = GramatronGenerator::new(&automaton);
-
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
-        state
-            .generate_initial_inputs_forced(
-                &mut fuzzer,
-                &mut executor,
-                &mut generator,
-                &mut mgr,
-                1024,
-            )
-            .expect("Failed to generate the initial corpus");
+        for input in &initial_inputs {
+            fuzzer
+                .add_input(&mut state, &mut executor, &mut mgr, input.clone())
+                .unwrap();
+        }
     }
 
-    // Setup a basic mutator with a mutational stage
-    let mutator = StdScheduledMutator::with_max_iterations(
+    let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
+
+    // Setup a mutational stage with a basic bytes mutator
+    let mutator = StdScheduledMutator::with_max_iterations(havoc_mutations(), 2);
+    let grimoire_mutator = StdScheduledMutator::with_max_iterations(
         tuple_list!(
-            GramatronRandomMutator::new(&generator),
-            GramatronRandomMutator::new(&generator),
-            GramatronRandomMutator::new(&generator),
-            GramatronSpliceMutator::new(),
-            GramatronSpliceMutator::new(),
-            GramatronRecursionMutator::new()
+            GrimoireExtensionMutator::new(),
+            GrimoireRecursiveReplacementMutator::new(),
+            GrimoireStringReplacementMutator::new(),
+            // give more probability to avoid large inputs
+            GrimoireRandomDeleteMutator::new(),
+            GrimoireRandomDeleteMutator::new(),
         ),
         3,
     );
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+    let mut stages = tuple_list!(
+        generalization,
+        tracing,
+        i2s,
+        StdMutationalStage::new(mutator),
+        StdMutationalStage::new(grimoire_mutator)
+    );
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]
