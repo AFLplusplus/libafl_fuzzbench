@@ -27,7 +27,7 @@ pub fn main() {
             .link_staticlib(&dir, env!("CARGO_PKG_NAME"))
             .add_arg("-fsanitize-coverage=trace-pc-guard")
             // needed by Nautilus
-            .add_link_arg("-lpython3.5")
+            .add_link_arg("-lpython3.8")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
