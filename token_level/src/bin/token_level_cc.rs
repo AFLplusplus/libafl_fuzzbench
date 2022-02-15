@@ -28,6 +28,8 @@ pub fn main() {
             .add_arg("-fsanitize-coverage=trace-pc-guard")
             // needed by Nautilus
             .add_link_arg("-Wl,--push-state,-Bstatic")
+            .add_link_arg("-L/usr/local/lib/python3.8/config-3.8-x86_64-linux-gnu/")
+            .add_link_arg("-L/usr/lib/python3.8/config-3.8-x86_64-linux-gnu/")
             .add_link_arg("-lpython3.8")
             .add_link_arg("-Wl,--pop-state")
             .run()
