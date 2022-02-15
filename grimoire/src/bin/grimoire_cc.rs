@@ -32,7 +32,7 @@ pub fn main() {
             .add_arg("-fsanitize-coverage=trace-pc-guard,trace-cmp")
             .add_pass(LLVMPasses::CmpLogRtn)
             // needed by Nautilus
-            .add_link_arg("-lpython3.8")
+            .add_link_arg("-lpython3.5")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
