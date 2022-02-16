@@ -32,6 +32,7 @@ pub fn main() {
             .add_link_arg("-L/usr/lib/python3.8/config-3.8-x86_64-linux-gnu/")
             .add_link_arg("-lpython3.8")
             .add_link_arg("-Wl,--pop-state")
+            .add_link_arg("-lutil")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
