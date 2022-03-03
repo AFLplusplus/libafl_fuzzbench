@@ -26,9 +26,7 @@ use libafl::{
         tuples::{tuple_list, Merge},
         AsSlice,
     },
-    corpus::{
-        Corpus, IndexesLenTimeMinimizerCorpusScheduler, OnDiskCorpus, PowerQueueCorpusScheduler,
-    },
+    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
@@ -41,6 +39,7 @@ use libafl::{
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
+    schedulers::{IndexesLenTimeMinimizerScheduler, PowerQueueScheduler},
     stages::{
         calibrate::CalibrationStage,
         power::{PowerMutationalStage, PowerSchedule},
@@ -262,7 +261,7 @@ fn fuzz(
             // RNG
             StdRand::with_seed(current_nanos()),
             // Corpus that will be evolved, we keep it in memory for performance
-            OnDiskCorpus::new(corpus_dir).unwrap(),
+            CachedOnDiskCorpus::new(corpus_dir, 4096).unwrap(),
             // Corpus in which we store solutions (crashes in this example),
             // on disk so the user can get them after stopping the fuzzer
             OnDiskCorpus::new(objective_dir).unwrap(),
@@ -292,7 +291,7 @@ fn fuzz(
     let power = PowerMutationalStage::new(mutator, PowerSchedule::FAST, &edges_observer);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerCorpusScheduler::new(PowerQueueCorpusScheduler::new());
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(PowerQueueScheduler::new());
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
