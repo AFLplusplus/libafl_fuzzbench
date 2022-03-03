@@ -40,7 +40,7 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{encoded_mutations::encoded_mutations, StdScheduledMutator},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, PowerQueueScheduler},
+    schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, StdState},
     Error, Evaluator,

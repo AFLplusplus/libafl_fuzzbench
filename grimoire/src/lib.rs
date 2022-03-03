@@ -43,7 +43,7 @@ use libafl::{
         GrimoireStringReplacementMutator, I2SRandReplace, Tokens,
     },
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, PowerQueueScheduler},
+    schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
     state::{HasCorpus, HasMetadata, StdState},
     Error, Evaluator,
