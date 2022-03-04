@@ -71,6 +71,13 @@ pub fn libafl_main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::new("report")
+                .short('r')
+                .long("report")
+                .help("The directory to place dumped testcases ('corpus')")
+                .takes_value(true),
+        )
+        .arg(
             Arg::new("grammar")
                 .short('g')
                 .long("grammar")
@@ -129,6 +136,19 @@ pub fn libafl_main() {
         }
     }
 
+    let report_dir = PathBuf::from(
+        res.value_of("report")
+            .expect("The --report parameter is missing")
+            .to_string(),
+    );
+    if fs::create_dir(&report_dir).is_err() {
+        println!("Report dir at {:?} already exists.", &report_dir);
+        if !report_dir.is_dir() {
+            println!("Report dir at {:?} is not a valid directory!", &report_dir);
+            return;
+        }
+    }
+
     let grammar_path = PathBuf::from(
         res.value_of("grammar")
             .expect("The --grammar parameter is missing")
@@ -153,7 +173,8 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(initial_dir, out_dir, crashes, context, timeout).expect("An error occurred while fuzzing");
+    fuzz(initial_dir, out_dir, crashes, report_dir, context, timeout)
+        .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(initial_dir: PathBuf, filenames: &[&str]) {
@@ -203,6 +224,7 @@ fn fuzz(
     initial_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
+    report_dir: PathBuf,
     context: NautilusContext,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -343,7 +365,17 @@ fn fuzz(
 
     // Setup a basic mutator with a mutational stage
     let mutator = StdScheduledMutator::new(encoded_mutations());
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
+        |input: &EncodedInput| {
+            let mut bytes = vec![];
+            encoder_decoder.decode(input, &mut bytes).unwrap();
+            bytes
+        },
+        &report_dir,
+    );
+
+    let mut stages = tuple_list!(fuzzbench, StdMutationalStage::new(mutator));
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]

@@ -70,6 +70,13 @@ pub fn libafl_main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::new("report")
+                .short('r')
+                .long("report")
+                .help("The directory to place dumped testcases ('corpus')")
+                .takes_value(true),
+        )
+        .arg(
             Arg::new("grammar")
                 .short('g')
                 .long("grammar")
@@ -82,6 +89,13 @@ pub fn libafl_main() {
                 .long("timeout")
                 .help("Timeout for each individual execution, in milliseconds")
                 .default_value("1200"),
+        )
+        .arg(
+            Arg::new("dump")
+                .short('d')
+                .long("dump")
+                .help("Dump serialized testcases to bytes")
+                .takes_value(false),
         )
         .arg(Arg::new("remaining").multiple_values(true))
         .try_get_matches()
@@ -142,6 +156,19 @@ pub fn libafl_main() {
     crashes.push("crashes");
     out_dir.push("queue");
 
+    let report_dir = PathBuf::from(
+        res.value_of("report")
+            .expect("The --report parameter is missing")
+            .to_string(),
+    );
+    if fs::create_dir(&report_dir).is_err() {
+        println!("Report dir at {:?} already exists.", &report_dir);
+        if !report_dir.is_dir() {
+            println!("Report dir at {:?} is not a valid directory!", &report_dir);
+            return;
+        }
+    }
+
     let timeout = Duration::from_millis(
         res.value_of("timeout")
             .unwrap()
@@ -150,7 +177,8 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, chunks, context, timeout).expect("An error occurred while fuzzing");
+    fuzz(out_dir, crashes, chunks, report_dir, context, timeout)
+        .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(context: NautilusContext, filenames: &[&str]) {
@@ -187,6 +215,7 @@ fn fuzz(
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
     chunks_dir: PathBuf,
+    report_dir: PathBuf,
     context: NautilusContext,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -333,7 +362,17 @@ fn fuzz(
         ),
         3,
     );
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
+        |input: &NautilusInput| {
+            let mut bytes = vec![];
+            input.unparse(&context, &mut bytes);
+            bytes
+        },
+        &report_dir,
+    );
+
+    let mut stages = tuple_list!(fuzzbench, StdMutationalStage::new(mutator));
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]

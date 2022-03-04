@@ -64,7 +64,14 @@ pub fn libafl_main() {
             Arg::new("out")
                 .short('o')
                 .long("output")
-                .help("The directory to place finds in ('corpus')")
+                .help("The directory to place finds in ('out')")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("report")
+                .short('r')
+                .long("report")
+                .help("The directory to place dumped testcases ('corpus')")
                 .takes_value(true),
         )
         .arg(
@@ -138,6 +145,19 @@ pub fn libafl_main() {
     crashes.push("crashes");
     out_dir.push("queue");
 
+    let report_dir = PathBuf::from(
+        res.value_of("report")
+            .expect("The --report parameter is missing")
+            .to_string(),
+    );
+    if fs::create_dir(&report_dir).is_err() {
+        println!("Report dir at {:?} already exists.", &report_dir);
+        if !report_dir.is_dir() {
+            println!("Report dir at {:?} is not a valid directory!", &report_dir);
+            return;
+        }
+    }
+
     let timeout = Duration::from_millis(
         res.value_of("timeout")
             .unwrap()
@@ -146,7 +166,8 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, automaton, timeout).expect("An error occurred while fuzzing");
+    fuzz(out_dir, crashes, report_dir, automaton, timeout)
+        .expect("An error occurred while fuzzing");
 }
 
 fn read_automaton_from_file<P: AsRef<Path>>(path: P) -> Automaton {
@@ -196,6 +217,7 @@ fn run_testcases(filenames: &[&str]) {
 fn fuzz(
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
+    report_dir: PathBuf,
     automaton: Automaton,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -334,7 +356,19 @@ fn fuzz(
         ),
         3,
     );
-    let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
+        |input: &GramatronInput| {
+            let mut bytes = vec![];
+            if !input.terminals().is_empty() {
+                input.unparse(&mut bytes);
+            }
+            bytes
+        },
+        &report_dir,
+    );
+
+    let mut stages = tuple_list!(fuzzbench, StdMutationalStage::new(mutator));
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]

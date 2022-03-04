@@ -10,7 +10,8 @@ members = [
     "gramatron",
     "grimoire",
     "nautilus",
-    "token_level"
+    "token_level",
+    "fuzzbench_util",
 ]
 exclude = [
     "LibAFL",

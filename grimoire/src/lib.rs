@@ -76,6 +76,13 @@ pub fn libafl_main() {
                 .takes_value(true),
         )
         .arg(
+            Arg::new("report")
+                .short('r')
+                .long("report")
+                .help("The directory to place dumped testcases ('corpus')")
+                .takes_value(true),
+        )
+        .arg(
             Arg::new("grammar")
                 .short('g')
                 .long("grammar")
@@ -95,6 +102,13 @@ pub fn libafl_main() {
                 .long("timeout")
                 .help("Timeout for each individual execution, in milliseconds")
                 .default_value("1200"),
+        )
+        .arg(
+            Arg::new("dump")
+                .short('d')
+                .long("dump")
+                .help("Dump serialized testcases to bytes")
+                .takes_value(false),
         )
         .arg(Arg::new("remaining").multiple_values(true))
         .try_get_matches()
@@ -156,6 +170,19 @@ pub fn libafl_main() {
     crashes.push("crashes");
     out_dir.push("queue");
 
+    let report_dir = PathBuf::from(
+        res.value_of("report")
+            .expect("The --report parameter is missing")
+            .to_string(),
+    );
+    if fs::create_dir(&report_dir).is_err() {
+        println!("Report dir at {:?} already exists.", &report_dir);
+        if !report_dir.is_dir() {
+            println!("Report dir at {:?} is not a valid directory!", &report_dir);
+            return;
+        }
+    }
+
     let tokens = res.value_of("tokens").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
@@ -166,8 +193,16 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(initial_dir, out_dir, crashes, context, tokens, timeout)
-        .expect("An error occurred while fuzzing");
+    fuzz(
+        initial_dir,
+        out_dir,
+        crashes,
+        report_dir,
+        context,
+        tokens,
+        timeout,
+    )
+    .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -204,6 +239,7 @@ fn fuzz(
     initial_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
+    report_dir: PathBuf,
     context: NautilusContext,
     tokenfile: Option<PathBuf>,
     timeout: Duration,
@@ -393,7 +429,17 @@ fn fuzz(
         ),
         3,
     );
+
+    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
+        |input: &GeneralizedInput| {
+            let target_bytes = input.target_bytes();
+            target_bytes.as_slice().to_vec()
+        },
+        &report_dir,
+    );
+
     let mut stages = tuple_list!(
+        fuzzbench,
         generalization,
         tracing,
         i2s,
