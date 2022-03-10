@@ -34,20 +34,14 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
-    mutators::{
-        scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
-        StdScheduledMutator, Tokens,
-    },
+    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{StdMutationalStage, TracingStage},
+    stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
-use libafl_targets::{
-    libfuzzer_initialize, libfuzzer_test_one_input, CmpLogObserver, CMPLOG_MAP, CMP_MAP, EDGES_MAP,
-    MAX_EDGES_NUM,
-};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -233,24 +227,14 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    let cmps = unsafe { &mut CMP_MAP };
-    let cmps_observer = StdMapObserver::new("cmps", cmps);
-
-    let cmplog = unsafe { &mut CMPLOG_MAP };
-    let cmplog_observer = CmpLogObserver::new("cmplog", cmplog, true);
-
     // The state of the edges feedback.
-    let edges_feedback_state = MapFeedbackState::with_observer(&edges_observer);
-
-    let cmps_feedback_state = MapFeedbackState::with_observer(&cmps_observer);
+    let feedback_state = MapFeedbackState::with_observer(&edges_observer);
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
     let feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&edges_feedback_state, &edges_observer, true, false),
-        // Cmp max feedback
-        MaxMapFeedback::new(&cmps_feedback_state, &cmps_observer),
+        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, false),
         // Time feedback, this one does not need a feedback state
         TimeFeedback::new_with_observer(&time_observer)
     );
@@ -270,7 +254,7 @@ fn fuzz(
             OnDiskCorpus::new(objective_dir).unwrap(),
             // States of the feedbacks.
             // They are the data related to the feedbacks that you want to persist in the State.
-            tuple_list!(edges_feedback_state, cmps_feedback_state),
+            tuple_list!(feedback_state),
         )
     });
 
@@ -282,9 +266,6 @@ fn fuzz(
     if libfuzzer_initialize(&args) == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
-
-    // Setup a randomic Input2State stage
-    let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     let mutator = StdMutationalStage::new(StdScheduledMutator::new(
         havoc_mutations().merge(tokens_mutations()),
@@ -304,8 +285,6 @@ fn fuzz(
         ExitKind::Ok
     };
 
-    let mut tracing_harness = harness;
-
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
     let mut executor = TimeoutExecutor::new(
         InProcessExecutor::new(
@@ -318,21 +297,8 @@ fn fuzz(
         timeout,
     );
 
-    // Setup a tracing stage in which we log comparisons
-    let tracing = TracingStage::new(TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut tracing_harness,
-            tuple_list!(cmplog_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
-        // Give it more time!
-        timeout * 10,
-    ));
-
     // The order of the stages matter!
-    let mut stages = tuple_list!(tracing, i2s, mutator);
+    let mut stages = tuple_list!(mutator);
 
     // Read tokens
     if state.metadata().get::<Tokens>().is_none() {

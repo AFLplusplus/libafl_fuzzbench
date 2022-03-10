@@ -7,6 +7,8 @@ debug = true
 [workspace]
 members = [
     "generic",
+    "naive",
+    "cmplog",
     "value_profile",
     "value_profile_cmplog",
     "gramatron",
