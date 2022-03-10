@@ -8,6 +8,7 @@ debug = true
 members = [
     "generic",
     "value_profile",
+    "value_profile_cmplog",
     "gramatron",
     "grimoire",
     "nautilus",
