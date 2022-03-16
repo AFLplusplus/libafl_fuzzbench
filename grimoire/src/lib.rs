@@ -264,7 +264,7 @@ fn fuzz(
 
     let mut initial_inputs = vec![];
     let mut bytes = vec![];
-    for i in 0..1024 {
+    for i in 0..4096 {
         let nautilus = generator.generate(&mut ()).unwrap();
         nautilus.unparse(&context, &mut bytes);
 

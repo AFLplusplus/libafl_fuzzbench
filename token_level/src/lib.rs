@@ -187,7 +187,7 @@ fn run_testcases(initial_dir: PathBuf, filenames: &[&str]) {
 
     let mut tokenizer = NaiveTokenizer::default();
     let mut encoder_decoder = TokenInputEncoderDecoder::new();
-    for i in 0..1024 {
+    for i in 0..4096 {
         let mut file =
             fs::File::open(&initial_dir.join(format!("id_{}", i))).expect("no file found");
         let mut buffer = vec![];
@@ -251,7 +251,7 @@ fn fuzz(
 
     let mut initial_inputs = vec![];
     let mut bytes = vec![];
-    for i in 0..1024 {
+    for i in 0..4096 {
         let nautilus = generator.generate(&mut ()).unwrap();
         nautilus.unparse(&context, &mut bytes);
 

@@ -339,7 +339,7 @@ fn fuzz(
                 &mut executor,
                 &mut generator,
                 &mut mgr,
-                1024,
+                4096,
             )
             .expect("Failed to generate the initial corpus");
     }
