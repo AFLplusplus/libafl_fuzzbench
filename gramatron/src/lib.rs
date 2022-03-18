@@ -86,7 +86,7 @@ pub fn libafl_main() {
                 .short('t')
                 .long("timeout")
                 .help("Timeout for each individual execution, in milliseconds")
-                .default_value("1200"),
+                .default_value("12000"),
         )
         .arg(Arg::new("remaining").multiple_values(true))
         .try_get_matches()
@@ -350,6 +350,10 @@ fn fuzz(
             GramatronRandomMutator::new(&generator),
             GramatronRandomMutator::new(&generator),
             GramatronRandomMutator::new(&generator),
+            GramatronRandomMutator::new(&generator),
+            GramatronRandomMutator::new(&generator),
+            GramatronRandomMutator::new(&generator),
+            GramatronSpliceMutator::new(),
             GramatronSpliceMutator::new(),
             GramatronSpliceMutator::new(),
             GramatronRecursionMutator::new()

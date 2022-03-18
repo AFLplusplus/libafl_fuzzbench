@@ -101,7 +101,7 @@ pub fn libafl_main() {
                 .short('t')
                 .long("timeout")
                 .help("Timeout for each individual execution, in milliseconds")
-                .default_value("1200"),
+                .default_value("12000"),
         )
         .arg(
             Arg::new("dump")
@@ -424,7 +424,6 @@ fn fuzz(
             GrimoireRecursiveReplacementMutator::new(),
             GrimoireStringReplacementMutator::new(),
             // give more probability to avoid large inputs
-            GrimoireRandomDeleteMutator::new(),
             GrimoireRandomDeleteMutator::new(),
             GrimoireRandomDeleteMutator::new(),
         ),
