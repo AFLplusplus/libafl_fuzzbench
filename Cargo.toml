@@ -13,6 +13,7 @@ members = [
     "value_profile",
     "value_profile_cmplog",
     "rand_scheduler",
+    "cov_accounting",
     "gramatron",
     "grimoire",
     "nautilus",
