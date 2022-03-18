@@ -9,6 +9,8 @@ members = [
     "generic",
     "text",
     "naive", # indexlenmin scheduler
+    "naive_ctx",
+    "fast",
     "cmplog",
     "value_profile",
     "value_profile_cmplog",

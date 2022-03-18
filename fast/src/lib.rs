@@ -1,7 +1,4 @@
-//! A libfuzzer-like fuzzer with llmp-multithreading support and restarts
-//! The example harness is built for libpng.
-//! In this example, you will see the use of the `launcher` feature.
-//! The `launcher` will spawn new processes for each cpu core.
+//! A singlethreaded libfuzzer-like fuzzer that can auto-restart.
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -15,8 +12,9 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::{
     env,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::PathBuf,
+    process,
 };
 
 use libafl::{
@@ -25,7 +23,7 @@ use libafl::{
         os::dup2,
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider},
-        tuples::tuple_list,
+        tuples::{tuple_list, Merge},
         AsSlice,
     },
     corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
@@ -34,25 +32,19 @@ use libafl::{
     feedback_or,
     feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{Generator, NautilusContext, NautilusGenerator},
-    inputs::{GeneralizedInput, HasTargetBytes, Input},
+    inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
-    mutators::{
-        havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
-        GrimoireRandomDeleteMutator, GrimoireRecursiveReplacementMutator,
-        GrimoireStringReplacementMutator, I2SRandReplace, Tokens,
-    },
+    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
+    stages::{
+        calibrate::CalibrationStage,
+        power::{PowerMutationalStage, PowerSchedule},
+    },
     state::{HasCorpus, HasMetadata, StdState},
-    Error, Evaluator,
+    Error,
 };
-
-use libafl_targets::{
-    libfuzzer_initialize, libfuzzer_test_one_input, CmpLogObserver, CMPLOG_MAP, EDGES_MAP,
-    MAX_EDGES_NUM,
-};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -76,17 +68,10 @@ pub fn libafl_main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::new("report")
-                .short('r')
-                .long("report")
-                .help("The directory to place dumped testcases ('corpus')")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("grammar")
-                .short('g')
-                .long("grammar")
-                .help("The grammar model")
+            Arg::new("in")
+                .short('i')
+                .long("input")
+                .help("The directory to read initial inputs from ('seeds')")
                 .takes_value(true),
         )
         .arg(
@@ -103,20 +88,13 @@ pub fn libafl_main() {
                 .help("Timeout for each individual execution, in milliseconds")
                 .default_value("1200"),
         )
-        .arg(
-            Arg::new("dump")
-                .short('d')
-                .long("dump")
-                .help("Dump serialized testcases to bytes")
-                .takes_value(false),
-        )
         .arg(Arg::new("remaining").multiple_values(true))
         .try_get_matches()
     {
         Ok(res) => res,
         Err(err) => {
             println!(
-                "Syntax: {}, [-x dictionary] -o corpus_dir -g grammar.json\n{:?}",
+                "Syntax: {}, [-x dictionary] -o corpus_dir -i seed_dir\n{:?}",
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
@@ -139,17 +117,6 @@ pub fn libafl_main() {
         }
     }
 
-    let grammar_path = PathBuf::from(
-        res.value_of("grammar")
-            .expect("The --grammar parameter is missing")
-            .to_string(),
-    );
-    if !grammar_path.is_file() {
-        println!("{:?} is not a valid file!", &grammar_path);
-        return;
-    }
-    let context = NautilusContext::from_file(64, grammar_path);
-
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
         res.value_of("out")
@@ -163,24 +130,18 @@ pub fn libafl_main() {
             return;
         }
     }
-    let mut initial_dir = out_dir.clone();
-    initial_dir.push("initial");
-    fs::create_dir_all(&initial_dir).unwrap();
     let mut crashes = out_dir.clone();
     crashes.push("crashes");
     out_dir.push("queue");
 
-    let report_dir = PathBuf::from(
-        res.value_of("report")
-            .expect("The --report parameter is missing")
+    let in_dir = PathBuf::from(
+        res.value_of("in")
+            .expect("The --input parameter is missing")
             .to_string(),
     );
-    if fs::create_dir(&report_dir).is_err() {
-        println!("Report dir at {:?} already exists.", &report_dir);
-        if !report_dir.is_dir() {
-            println!("Report dir at {:?} is not a valid directory!", &report_dir);
-            return;
-        }
+    if !in_dir.is_dir() {
+        println!("In dir at {:?} is not a valid directory!", &in_dir);
+        return;
     }
 
     let tokens = res.value_of("tokens").map(PathBuf::from);
@@ -193,16 +154,7 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(
-        initial_dir,
-        out_dir,
-        crashes,
-        report_dir,
-        context,
-        tokens,
-        timeout,
-    )
-    .expect("An error occurred while fuzzing");
+    fuzz(out_dir, crashes, in_dir, tokens, timeout).expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -220,27 +172,19 @@ fn run_testcases(filenames: &[&str]) {
     for fname in filenames {
         println!("Executing {}", fname);
 
-        let input = GeneralizedInput::from_file(fname).expect("no file found");
+        let mut file = File::open(fname).expect("No file found");
+        let mut buffer = vec![];
+        file.read_to_end(&mut buffer).expect("Buffer overflow");
 
-        let target_bytes = input.target_bytes();
-        let mut bytes = target_bytes.as_slice().to_vec();
-        if *bytes.last().unwrap() != 0 {
-            bytes.push(0);
-        }
-        unsafe {
-            println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
-        }
-        libfuzzer_test_one_input(&bytes);
+        libfuzzer_test_one_input(&buffer);
     }
 }
 
 /// The actual fuzzer
 fn fuzz(
-    initial_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
-    report_dir: PathBuf,
-    context: NautilusContext,
+    seed_dir: PathBuf,
     tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -259,21 +203,6 @@ fn fuzz(
         #[cfg(windows)]
         println!("{}", s);
     });
-
-    let mut generator = NautilusGenerator::new(&context);
-
-    let mut initial_inputs = vec![];
-    let mut bytes = vec![];
-    for i in 0..4096 {
-        let nautilus = generator.generate(&mut ()).unwrap();
-        nautilus.unparse(&context, &mut bytes);
-
-        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
-        file.write_all(&bytes).unwrap();
-
-        let input = GeneralizedInput::new(bytes.clone());
-        initial_inputs.push(input);
-    }
 
     // We need a shared map to store our state before a crash.
     // This way, we are able to continue fuzzing afterwards.
@@ -294,14 +223,12 @@ fn fuzz(
     };
 
     // Create an observation channel using the coverage map
+    // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
     let edges = unsafe { &mut EDGES_MAP[0..MAX_EDGES_NUM] };
     let edges_observer = HitcountsMapObserver::new(StdMapObserver::new("edges", edges));
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
-
-    let cmplog = unsafe { &mut CMPLOG_MAP };
-    let cmplog_observer = CmpLogObserver::new("cmplog", cmplog, true);
 
     // The state of the edges feedback.
     let feedback_state = MapFeedbackState::with_observer(&edges_observer);
@@ -310,7 +237,7 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, true),
+        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, false),
         // Time feedback, this one does not need a feedback state
         TimeFeedback::new_with_observer(&time_observer)
     );
@@ -334,21 +261,19 @@ fn fuzz(
         )
     });
 
-    // Read tokens
-    if state.metadata().get::<Tokens>().is_none() {
-        let mut toks = Tokens::default();
-        if let Some(tokenfile) = &tokenfile {
-            toks.add_from_file(tokenfile)?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            toks += autotokens()?;
-        }
+    println!("Let's fuzz :)");
 
-        if !toks.is_empty() {
-            state.add_metadata(toks);
-        }
+    // The actual target run starts here.
+    // Call LLVMFUzzerInitialize() if present.
+    let args: Vec<String> = env::args().collect();
+    if libfuzzer_initialize(&args) == -1 {
+        println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
+
+    let calibration = CalibrationStage::new(&mut state, &edges_observer);
+
+    let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
+    let power = PowerMutationalStage::new(mutator, PowerSchedule::FAST, &edges_observer);
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
@@ -356,13 +281,11 @@ fn fuzz(
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
-    let generalization = GeneralizationStage::new(&edges_observer);
-
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut harness = |input: &GeneralizedInput| {
-        let target_bytes = input.target_bytes();
-        let bytes = target_bytes.as_slice();
-        libfuzzer_test_one_input(&bytes);
+    let mut harness = |input: &BytesInput| {
+        let target = input.target_bytes();
+        let buf = target.as_slice();
+        libfuzzer_test_one_input(buf);
         ExitKind::Ok
     };
 
@@ -378,75 +301,35 @@ fn fuzz(
         timeout,
     );
 
-    let mut tracing_harness = |input: &GeneralizedInput| {
-        let target_bytes = input.target_bytes();
-        let bytes = target_bytes.as_slice();
-        libfuzzer_test_one_input(&bytes);
-        ExitKind::Ok
-    };
+    // The order of the stages matter!
+    let mut stages = tuple_list!(calibration, power);
 
-    // Setup a tracing stage in which we log comparisons
-    let tracing = TracingStage::new(TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut tracing_harness,
-            tuple_list!(cmplog_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
-        // Give it more time!
-        timeout * 10,
-    ));
+    // Read tokens
+    if state.metadata().get::<Tokens>().is_none() {
+        let mut toks = Tokens::default();
+        if let Some(tokenfile) = tokenfile {
+            toks.add_from_file(tokenfile)?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            toks += autotokens()?;
+        }
 
-    // The actual target run starts here.
-    // Call LLVMFUzzerInitialize() if present.
-    let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
-        println!("Warning: LLVMFuzzerInitialize failed with -1")
+        if !toks.is_empty() {
+            state.add_metadata(toks);
+        }
     }
 
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
-        for input in &initial_inputs {
-            fuzzer
-                .add_input(&mut state, &mut executor, &mut mgr, input.clone())
-                .unwrap();
-        }
+        state
+            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[seed_dir.clone()])
+            .unwrap_or_else(|_| {
+                println!("Failed to load initial corpus at {:?}", &seed_dir);
+                process::exit(0);
+            });
+        println!("We imported {} inputs from disk.", state.corpus().count());
     }
-
-    let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
-
-    // Setup a mutational stage with a basic bytes mutator
-    let mutator = StdScheduledMutator::with_max_iterations(havoc_mutations(), 2);
-    let grimoire_mutator = StdScheduledMutator::with_max_iterations(
-        tuple_list!(
-            GrimoireExtensionMutator::new(),
-            GrimoireRecursiveReplacementMutator::new(),
-            GrimoireStringReplacementMutator::new(),
-            // give more probability to avoid large inputs
-            GrimoireRandomDeleteMutator::new(),
-            GrimoireRandomDeleteMutator::new(),
-            GrimoireRandomDeleteMutator::new(),
-        ),
-        3,
-    );
-
-    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
-        |input: &GeneralizedInput| {
-            let target_bytes = input.target_bytes();
-            target_bytes.as_slice().to_vec()
-        },
-        &report_dir,
-    );
-
-    let mut stages = tuple_list!(
-        fuzzbench,
-        generalization,
-        tracing,
-        i2s,
-        StdMutationalStage::new(mutator),
-        StdMutationalStage::new(grimoire_mutator)
-    );
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]
@@ -457,5 +340,7 @@ fn fuzz(
     }
 
     fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+
+    // Never reached
     Ok(())
 }
