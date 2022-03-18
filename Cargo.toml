@@ -8,10 +8,11 @@ debug = true
 members = [
     "generic",
     "text",
-    "naive",
+    "naive", # indexlenmin scheduler
     "cmplog",
     "value_profile",
     "value_profile_cmplog",
+    "rand_scheduler",
     "gramatron",
     "grimoire",
     "nautilus",
