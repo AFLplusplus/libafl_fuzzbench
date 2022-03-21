@@ -310,7 +310,7 @@ fn fuzz(
     let mut executor = TimeoutExecutor::new(
         InProcessExecutor::new(
             &mut harness,
-            tuple_list!(edges_observer, time_observer),
+            tuple_list!(edges_observer, cmps_observer, time_observer),
             &mut fuzzer,
             &mut state,
             &mut mgr,
