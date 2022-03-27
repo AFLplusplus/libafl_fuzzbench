@@ -21,6 +21,7 @@ members = [
     "nautilus",
     "token_level",
     "fuzzbench_util",
+    "weighted",
 ]
 exclude = [
     "LibAFL",
