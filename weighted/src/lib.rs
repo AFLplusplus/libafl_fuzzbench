@@ -36,11 +36,8 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler, powersched::PowerSchedule},
-    stages::{
-        calibrate::CalibrationStage,
-        power::StdPowerMutationalStage,
-    },
+    schedulers::{IndexesLenTimeMinimizerScheduler, StdWeightedScheduler},
+    stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
@@ -270,13 +267,12 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
-    let calibration = CalibrationStage::new(&edges_observer);
-
-    let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
-    let power = StdPowerMutationalStage::new(&mut state, mutator, &edges_observer, PowerSchedule::FAST);
+    let mutator = StdMutationalStage::new(StdScheduledMutator::new(
+        havoc_mutations().merge(tokens_mutations()),
+    ));
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::new());
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -302,7 +298,7 @@ fn fuzz(
     );
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(calibration, power);
+    let mut stages = tuple_list!(mutator);
 
     // Read tokens
     if state.metadata().get::<Tokens>().is_none() {
