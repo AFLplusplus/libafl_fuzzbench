@@ -39,11 +39,12 @@ use libafl::{
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, PowerQueueScheduler, powersched::PowerSchedule},
+    schedulers::{
+        powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, PowerQueueScheduler,
+    },
     stages::{
-        calibrate::CalibrationStage,
-        power::StdPowerMutationalStage,
-        StdMutationalStage, TracingStage,
+        calibrate::CalibrationStage, power::StdPowerMutationalStage, StdMutationalStage,
+        TracingStage,
     },
     state::{HasCorpus, HasMetadata, StdState},
     Error,
@@ -288,7 +289,8 @@ fn fuzz(
     // Setup a MOPT mutator
     let mutator = StdMOptMutator::new(&mut state, havoc_mutations().merge(tokens_mutations()), 5)?;
 
-    let power = StdPowerMutationalStage::new(&mut state, mutator, &edges_observer, PowerSchedule::FAST);
+    let power =
+        StdPowerMutationalStage::new(&mut state, mutator, &edges_observer, PowerSchedule::FAST);
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(PowerQueueScheduler::new());
