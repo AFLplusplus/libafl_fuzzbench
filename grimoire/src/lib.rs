@@ -35,7 +35,7 @@ use libafl::{
     feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::{Generator, NautilusContext, NautilusGenerator},
-    inputs::{GeneralizedInput, HasTargetBytes, Input},
+    inputs::{GeneralizedInput, HasBytesVec, HasTargetBytes, Input},
     monitors::SimpleMonitor,
     mutators::{
         havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
@@ -265,6 +265,7 @@ fn fuzz(
     let mut initial_inputs = vec![];
     let mut bytes = vec![];
     for i in 0..4096 {
+        //for i in 0..1 {
         let nautilus = generator.generate(&mut ()).unwrap();
         nautilus.unparse(&context, &mut bytes);
 
@@ -360,6 +361,21 @@ fn fuzz(
 
     // The wrapped harness function, calling out to the LLVM-style harness
     let mut harness = |input: &GeneralizedInput| {
+        /*use libafl::inputs::generalized::GeneralizedItem;
+        if input.grimoire_mutated {
+            if let Some(gen) = input.generalized() {
+                print!(">> ");
+                for e in gen {
+                    match e {
+                        GeneralizedItem::Bytes(b) => print!("`{}`", unsafe { std::str::from_utf8_unchecked(&b) }),
+                        GeneralizedItem::Gap => print!(" <GAP> "),
+                    }
+                }
+                print!("\n");
+            }
+            let bytes = input.generalized_to_bytes();
+            println!("@@ {}", unsafe { std::str::from_utf8_unchecked(&bytes) });
+        }*/
         let target_bytes = input.target_bytes();
         let bytes = target_bytes.as_slice();
         libfuzzer_test_one_input(&bytes);
@@ -432,8 +448,11 @@ fn fuzz(
 
     let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
         |input: &GeneralizedInput| {
-            let target_bytes = input.target_bytes();
-            target_bytes.as_slice().to_vec()
+            if input.generalized().is_some() {
+                input.generalized_to_bytes()
+            } else {
+                input.bytes().to_vec()
+            }
         },
         &report_dir,
     );
