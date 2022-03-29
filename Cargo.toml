@@ -19,6 +19,7 @@ members = [
     "gramatron",
     "grimoire",
     "nautilus",
+    "nautilus_mopt",
     "token_level",
     "fuzzbench_util",
     "weighted",
