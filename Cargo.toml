@@ -11,6 +11,7 @@ members = [
     "naive", # indexlenmin scheduler
     "naive_ctx",
     "fast",
+    "fast_ctx",
     "cmplog",
     "value_profile",
     "value_profile_cmplog",
