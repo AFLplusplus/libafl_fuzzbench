@@ -433,8 +433,8 @@ fn fuzz(
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     // Setup a mutational stage with a basic bytes mutator
-    let mutator = StdScheduledMutator::with_max_iterations(havoc_mutations(), 2);
-    let grimoire_mutator = StdScheduledMutator::with_max_iterations(
+    let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations(), 2);
+    let grimoire_mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
             GrimoireExtensionMutator::new(),
             GrimoireRecursiveReplacementMutator::new(),

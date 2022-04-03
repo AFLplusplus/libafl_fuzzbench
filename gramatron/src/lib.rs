@@ -345,7 +345,7 @@ fn fuzz(
     }
 
     // Setup a basic mutator with a mutational stage
-    let mutator = StdScheduledMutator::with_max_iterations(
+    let mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
             GramatronRandomMutator::new(&generator),
             GramatronRandomMutator::new(&generator),

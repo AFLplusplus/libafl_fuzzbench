@@ -538,12 +538,17 @@ fn fuzz_text(
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     // Setup a MOPT mutator
-    let mutator = StdMOptMutator::new(&mut state, havoc_mutations().merge(tokens_mutations()), 5)?;
+    let mutator = StdMOptMutator::new(
+        &mut state,
+        havoc_mutations().merge(tokens_mutations()),
+        3,
+        5,
+    )?;
 
     let power =
         StdPowerMutationalStage::new(&mut state, mutator, &edges_observer, PowerSchedule::FAST);
 
-    let grimoire_mutator = StdScheduledMutator::with_max_iterations(
+    let grimoire_mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
             GrimoireExtensionMutator::new(),
             GrimoireRecursiveReplacementMutator::new(),
