@@ -12,6 +12,8 @@ members = [
     "naive_ctx",
     "fast",
     "fast_ctx",
+    "coe",
+    "explore",
     "cmplog",
     "value_profile",
     "value_profile_cmplog",
