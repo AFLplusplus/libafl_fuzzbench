@@ -354,6 +354,7 @@ fn fuzz(
             NautilusRecursionMutator::new(&context),
             NautilusSpliceMutator::new(&context),
         ),
+        3,
         5,
     )?;
 
