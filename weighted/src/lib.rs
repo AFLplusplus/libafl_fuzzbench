@@ -39,7 +39,7 @@ use libafl::{
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
     },
-    stages::{calibrate::CalibrationStage, power::StdPowerMutationalStage},
+    stages::power::StdPowerMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
