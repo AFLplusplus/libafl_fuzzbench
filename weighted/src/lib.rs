@@ -36,8 +36,10 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, StdWeightedScheduler},
-    stages::StdMutationalStage,
+    schedulers::{
+        powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
+    },
+    stages::{calibrate::CalibrationStage, power::StdPowerMutationalStage},
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
@@ -267,9 +269,10 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
-    let mutator = StdMutationalStage::new(StdScheduledMutator::new(
-        havoc_mutations().merge(tokens_mutations()),
-    ));
+    let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
+
+    let power =
+        StdPowerMutationalStage::new(&mut state, mutator, &edges_observer, PowerSchedule::RAND);
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::new());
@@ -298,7 +301,7 @@ fn fuzz(
     );
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(mutator);
+    let mut stages = tuple_list!(power);
 
     // Read tokens
     if state.metadata().get::<Tokens>().is_none() {
