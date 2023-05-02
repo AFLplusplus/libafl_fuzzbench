@@ -27,7 +27,7 @@ use libafl::{
         shmem::{ShMemProvider, StdShMemProvider},
         tuples::tuple_list,
     },
-    corpus::{InMemoryOnDiskCorpus, Corpus, OnDiskCorpus},
+    corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,

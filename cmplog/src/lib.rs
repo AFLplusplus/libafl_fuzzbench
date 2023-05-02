@@ -26,7 +26,7 @@ use libafl::{
         tuples::{tuple_list, Merge},
         AsSlice,
     },
-    corpus::{InMemoryOnDiskCorpus, Corpus, OnDiskCorpus},
+    corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
@@ -66,19 +66,19 @@ pub fn libafl_main() {
             Arg::new("out")
                 .short('o')
                 .long("output")
-                .help("The directory to place finds in ('corpus')")
+                .help("The directory to place finds in ('corpus')"),
         )
         .arg(
             Arg::new("in")
                 .short('i')
                 .long("input")
-                .help("The directory to read initial inputs from ('seeds')")
+                .help("The directory to read initial inputs from ('seeds')"),
         )
         .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
-                .help("A file to read tokens from, to be used during fuzzing")
+                .help("A file to read tokens from, to be used during fuzzing"),
         )
         .arg(
             Arg::new("timeout")
