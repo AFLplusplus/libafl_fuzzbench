@@ -26,7 +26,7 @@ use libafl::{
         tuples::{tuple_list, Merge},
         AsSlice,
     },
-    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
+    corpus::{InMemoryOnDiskCorpus, Corpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
@@ -39,7 +39,7 @@ use libafl::{
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
-    Error,
+    Error, prelude::InMemoryOnDiskCorpus,
 };
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer};
 
@@ -241,7 +241,7 @@ fn fuzz(
             // RNG
             StdRand::with_seed(current_nanos()),
             // Corpus that will be evolved, we keep it in memory for performance
-            CachedOnDiskCorpus::new(corpus_dir, 4096).unwrap(),
+            InMemoryOnDiskCorpus::new(corpus_dir).unwrap(),
             // Corpus in which we store solutions (crashes in this example),
             // on disk so the user can get them after stopping the fuzzer
             OnDiskCorpus::new(objective_dir).unwrap(),
