@@ -10,8 +10,8 @@ libafl_targets = { path = "../LibAFL/libafl_targets/", features = ["sancov_pcgua
 serde_json = "1.0.68"
 # TODO Include it only when building cc
 libafl_cc = { path = "../LibAFL/libafl_cc/" }
-nix = "0.23"
-clap = { version = "3.0", features = ["derive"] }
+nix = "0.26"
+clap = { version = "4.0", features = ["derive"] }
 mimalloc = { version = "*", default-features = false }
 postcard = { version = "0.7", features = ["alloc"] } # no_std compatible serde serialization fromat
 
