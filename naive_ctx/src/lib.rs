@@ -35,7 +35,7 @@ use libafl::{
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},

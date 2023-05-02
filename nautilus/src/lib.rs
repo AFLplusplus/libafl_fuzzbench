@@ -6,7 +6,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use core::time::Duration;
 #[cfg(unix)]
 use nix::{self, unistd::dup};
@@ -32,8 +32,7 @@ use libafl::{
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
     feedbacks::{
-        CrashFeedback, MapFeedbackState, MaxMapFeedback, NautilusChunksMetadata, NautilusFeedback,
-        TimeFeedback,
+        CrashFeedback, MaxMapFeedback, NautilusChunksMetadata, NautilusFeedback, TimeFeedback,
     },
     fuzzer::{Fuzzer, StdFuzzer},
     generators::{NautilusContext, NautilusGenerator},
@@ -42,14 +41,14 @@ use libafl::{
     mutators::{
         NautilusRandomMutator, NautilusRecursionMutator, NautilusSpliceMutator, StdScheduledMutator,
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
 
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer};
 
 /// The fuzzer main (as `no_mangle` C function)
 #[no_mangle]
@@ -58,7 +57,7 @@ pub fn libafl_main() {
     // Needed only on no_std
     //RegistryBuilder::register::<Tokens>();
 
-    let res = match App::new(env!("CARGO_PKG_NAME"))
+    let res = match Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author("AFLplusplus team")
         .about("LibAFL-based fuzzer for Fuzzbench")
@@ -66,22 +65,19 @@ pub fn libafl_main() {
             Arg::new("out")
                 .short('o')
                 .long("output")
-                .help("The directory to place finds in ('corpus')")
-                .takes_value(true),
+                .help("The directory to place finds in ('corpus')"),
         )
         .arg(
             Arg::new("report")
                 .short('r')
                 .long("report")
-                .help("The directory to place dumped testcases ('corpus')")
-                .takes_value(true),
+                .help("The directory to place dumped testcases ('corpus')"),
         )
         .arg(
             Arg::new("grammar")
                 .short('g')
                 .long("grammar")
-                .help("The grammar model")
-                .takes_value(true),
+                .help("The grammar model"),
         )
         .arg(
             Arg::new("timeout")
@@ -94,10 +90,9 @@ pub fn libafl_main() {
             Arg::new("dump")
                 .short('d')
                 .long("dump")
-                .help("Dump serialized testcases to bytes")
-                .takes_value(false),
+                .help("Dump serialized testcases to bytes"),
         )
-        .arg(Arg::new("remaining").multiple_values(true))
+        .arg(Arg::new("remaining"))
         .try_get_matches()
     {
         Ok(res) => res,
@@ -107,7 +102,7 @@ pub fn libafl_main() {
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
-                err.info,
+                err,
             );
             return;
         }
@@ -119,7 +114,7 @@ pub fn libafl_main() {
     );
 
     let grammar_path = PathBuf::from(
-        res.value_of("grammar")
+        res.get_one::<String>("grammar")
             .expect("The --grammar parameter is missing")
             .to_string(),
     );
@@ -129,8 +124,8 @@ pub fn libafl_main() {
     }
     let context = NautilusContext::from_file(64, grammar_path);
 
-    if let Some(filenames) = res.values_of("remaining") {
-        let filenames: Vec<&str> = filenames.collect();
+    if let Some(filenames) = res.get_many::<String>("remaining") {
+        let filenames: Vec<&str> = filenames.map(String::as_str).collect();
         if !filenames.is_empty() {
             run_testcases(context, &filenames);
             return;
@@ -139,7 +134,7 @@ pub fn libafl_main() {
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
-        res.value_of("out")
+        res.get_one::<String>("out")
             .expect("The --output parameter is missing")
             .to_string(),
     );
@@ -157,7 +152,7 @@ pub fn libafl_main() {
     out_dir.push("queue");
 
     let report_dir = PathBuf::from(
-        res.value_of("report")
+        res.get_one::<String>("report")
             .expect("The --report parameter is missing")
             .to_string(),
     );
@@ -170,7 +165,7 @@ pub fn libafl_main() {
     }
 
     let timeout = Duration::from_millis(
-        res.value_of("timeout")
+        res.get_one::<String>("timeout")
             .unwrap()
             .to_string()
             .parse()
@@ -254,27 +249,23 @@ fn fuzz(
     };
 
     // Create an observation channel using the coverage map
-    let edges = unsafe { &mut EDGES_MAP[0..MAX_EDGES_NUM] };
-    let edges_observer = HitcountsMapObserver::new(StdMapObserver::new("edges", edges));
+    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    // The state of the edges feedback.
-    let feedback_state = MapFeedbackState::with_observer(&edges_observer);
-
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
-    let feedback = feedback_or!(
+    let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, false),
+        MaxMapFeedback::tracking(&edges_observer, true, false),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::new_with_observer(&time_observer),
+        TimeFeedback::with_observer(&time_observer),
         NautilusFeedback::new(&context)
     );
 
     // A feedback to choose if an input is a solution or not
-    let objective = CrashFeedback::new();
+    let mut objective = CrashFeedback::new();
 
     // If not restarting, create a State from scratch
     let mut state = state.unwrap_or_else(|| {
@@ -288,11 +279,17 @@ fn fuzz(
             OnDiskCorpus::new(objective_dir).unwrap(),
             // States of the feedbacks.
             // They are the data related to the feedbacks that you want to persist in the State.
-            tuple_list!(feedback_state),
+            &mut feedback,
+            &mut objective,
         )
+        .unwrap()
     });
 
-    if state.metadata().get::<NautilusChunksMetadata>().is_none() {
+    if state
+        .metadata_map()
+        .get::<NautilusChunksMetadata>()
+        .is_none()
+    {
         state.add_metadata(NautilusChunksMetadata::new(
             chunks_dir.display().to_string(),
         ));
@@ -363,14 +360,16 @@ fn fuzz(
         3,
     );
 
-    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
+    let fuzzbench = libafl::stages::DumpToDiskStage::new(
         |input: &NautilusInput| {
             let mut bytes = vec![];
             input.unparse(&context, &mut bytes);
             bytes
         },
-        &report_dir,
-    );
+        &report_dir.join("queue"),
+        &report_dir.join("crashes"),
+    )
+    .unwrap();
 
     let mut stages = tuple_list!(fuzzbench, StdMutationalStage::new(mutator));
 
