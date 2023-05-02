@@ -3,7 +3,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use core::time::Duration;
 #[cfg(unix)]
 use nix::{self, unistd::dup};
@@ -30,7 +30,7 @@ use libafl::{
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
-    feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
@@ -45,8 +45,7 @@ use libafl::{
     Error,
 };
 use libafl_targets::{
-    libfuzzer_initialize, libfuzzer_test_one_input, CmpLogObserver, CMPLOG_MAP, CMP_MAP, EDGES_MAP,
-    MAX_EDGES_NUM,
+    libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CmpLogObserver, CMP_MAP,
 };
 
 #[cfg(target_os = "linux")]
@@ -59,7 +58,7 @@ pub fn libafl_main() {
     // Needed only on no_std
     //RegistryBuilder::register::<Tokens>();
 
-    let res = match App::new(env!("CARGO_PKG_NAME"))
+    let res = match Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author("AFLplusplus team")
         .about("LibAFL-based fuzzer for Fuzzbench")
@@ -67,22 +66,19 @@ pub fn libafl_main() {
             Arg::new("out")
                 .short('o')
                 .long("output")
-                .help("The directory to place finds in ('corpus')")
-                .takes_value(true),
+                .help("The directory to place finds in ('corpus')"),
         )
         .arg(
             Arg::new("in")
                 .short('i')
                 .long("input")
-                .help("The directory to read initial inputs from ('seeds')")
-                .takes_value(true),
+                .help("The directory to read initial inputs from ('seeds')"),
         )
         .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
-                .help("A file to read tokens from, to be used during fuzzing")
-                .takes_value(true),
+                .help("A file to read tokens from, to be used during fuzzing"),
         )
         .arg(
             Arg::new("timeout")
@@ -91,7 +87,7 @@ pub fn libafl_main() {
                 .help("Timeout for each individual execution, in milliseconds")
                 .default_value("1200"),
         )
-        .arg(Arg::new("remaining").multiple_values(true))
+        .arg(Arg::new("remaining"))
         .try_get_matches()
     {
         Ok(res) => res,
@@ -101,7 +97,7 @@ pub fn libafl_main() {
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
-                err.info,
+                err,
             );
             return;
         }
@@ -112,8 +108,8 @@ pub fn libafl_main() {
         env::current_dir().unwrap().to_string_lossy().to_string()
     );
 
-    if let Some(filenames) = res.values_of("remaining") {
-        let filenames: Vec<&str> = filenames.collect();
+    if let Some(filenames) = res.get_many::<String>("remaining") {
+        let filenames: Vec<&str> = filenames.map(String::as_str).collect();
         if !filenames.is_empty() {
             run_testcases(&filenames);
             return;
@@ -122,7 +118,7 @@ pub fn libafl_main() {
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
-        res.value_of("out")
+        res.get_one::<String>("out")
             .expect("The --output parameter is missing")
             .to_string(),
     );
@@ -138,7 +134,7 @@ pub fn libafl_main() {
     out_dir.push("queue");
 
     let in_dir = PathBuf::from(
-        res.value_of("in")
+        res.get_one::<String>("in")
             .expect("The --input parameter is missing")
             .to_string(),
     );
@@ -147,10 +143,10 @@ pub fn libafl_main() {
         return;
     }
 
-    let tokens = res.value_of("tokens").map(PathBuf::from);
+    let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
-        res.value_of("timeout")
+        res.get_one::<String>("timeout")
             .unwrap()
             .to_string()
             .parse()
@@ -227,36 +223,29 @@ fn fuzz(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges = unsafe { &mut EDGES_MAP[0..MAX_EDGES_NUM] };
-    let edges_observer = HitcountsMapObserver::new(StdMapObserver::new("edges", edges));
+    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
     let cmps = unsafe { &mut CMP_MAP };
-    let cmps_observer = StdMapObserver::new("cmps", cmps);
+    let cmps_observer = unsafe { StdMapObserver::new("cmps", cmps) };
 
-    let cmplog = unsafe { &mut CMPLOG_MAP };
-    let cmplog_observer = CmpLogObserver::new("cmplog", cmplog, true);
-
-    // The state of the edges feedback.
-    let edges_feedback_state = MapFeedbackState::with_observer(&edges_observer);
-
-    let cmps_feedback_state = MapFeedbackState::with_observer(&cmps_observer);
+    let cmplog_observer = CmpLogObserver::new("cmplog", true);
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
-    let feedback = feedback_or!(
+    let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&edges_feedback_state, &edges_observer, true, false),
+        MaxMapFeedback::tracking(&edges_observer, true, false),
         // Cmp max feedback
-        MaxMapFeedback::new(&cmps_feedback_state, &cmps_observer),
+        MaxMapFeedback::new(&cmps_observer),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::new_with_observer(&time_observer)
+        TimeFeedback::with_observer(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
-    let objective = CrashFeedback::new();
+    let mut objective = CrashFeedback::new();
 
     // If not restarting, create a State from scratch
     let mut state = state.unwrap_or_else(|| {
@@ -270,8 +259,10 @@ fn fuzz(
             OnDiskCorpus::new(objective_dir).unwrap(),
             // States of the feedbacks.
             // They are the data related to the feedbacks that you want to persist in the State.
-            tuple_list!(edges_feedback_state, cmps_feedback_state),
+            &mut feedback,
+            &mut objective,
         )
+        .unwrap()
     });
 
     println!("Let's fuzz :)");
@@ -335,7 +326,7 @@ fn fuzz(
     let mut stages = tuple_list!(tracing, i2s, mutator);
 
     // Read tokens
-    if state.metadata().get::<Tokens>().is_none() {
+    if state.metadata_map().get::<Tokens>().is_none() {
         let mut toks = Tokens::default();
         if let Some(tokenfile) = tokenfile {
             toks.add_from_file(tokenfile)?;
