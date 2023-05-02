@@ -26,7 +26,7 @@ use libafl::{
         tuples::{tuple_list, Merge},
         AsSlice,
     },
-    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
+    corpus::{InMemoryOnDiskCorpus, Corpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
@@ -106,7 +106,7 @@ pub fn libafl_main() {
     );
 
     if let Some(filenames) = res.get_many::<String>("remaining") {
-        let filenames: Vec<&str> = filenames.map(String::as_ref).collect();
+        let filenames: Vec<&str> = filenames.map(String::as_str).collect();
         if !filenames.is_empty() {
             run_testcases(&filenames);
             return;
@@ -247,7 +247,7 @@ fn fuzz(
             // RNG
             StdRand::with_seed(current_nanos()),
             // Corpus that will be evolved, we keep it in memory for performance
-            CachedOnDiskCorpus::new(corpus_dir, 4096).unwrap(),
+            InMemoryOnDiskCorpus::new(corpus_dir).unwrap(),
             // Corpus in which we store solutions (crashes in this example),
             // on disk so the user can get them after stopping the fuzzer
             OnDiskCorpus::new(objective_dir).unwrap(),
