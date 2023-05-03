@@ -361,7 +361,7 @@ fn fuzz(
     );
 
     let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &NautilusInput| {
+        |input: &NautilusInput, _state: &_| {
             let mut bytes = vec![];
             input.unparse(&context, &mut bytes);
             bytes

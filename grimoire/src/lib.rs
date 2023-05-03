@@ -35,7 +35,7 @@ use libafl::{
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::{Generator, NautilusContext, NautilusGenerator},
-    inputs::{HasTargetBytes, Input, BytesInput, HasBytesVec},
+    inputs::{BytesInput, HasBytesVec, HasTargetBytes, Input},
     monitors::SimpleMonitor,
     mutators::{
         havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
@@ -44,7 +44,10 @@ use libafl::{
     },
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{mutational::{StdMutationalStage, MutatedTransform}, GeneralizationStage, TracingStage},
+    stages::{
+        mutational::{MutatedTransform, StdMutationalStage},
+        GeneralizationStage, TracingStage,
+    },
     state::{HasCorpus, HasMetadata, StdState},
     Error, Evaluator,
 };

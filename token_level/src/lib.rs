@@ -362,7 +362,7 @@ fn fuzz(
     let mutator = StdScheduledMutator::new(encoded_mutations());
 
     let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &EncodedInput| {
+        |input: &EncodedInput, _stage: &_| {
             let mut bytes = vec![];
             encoder_decoder.decode(input, &mut bytes).unwrap();
             bytes
