@@ -35,17 +35,16 @@ use libafl::{
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::{Generator, NautilusContext, NautilusGenerator},
-    inputs::{HasBytesVec, HasTargetBytes, Input},
+    inputs::{HasTargetBytes, Input, BytesInput, HasBytesVec},
     monitors::SimpleMonitor,
     mutators::{
         havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
         GrimoireRandomDeleteMutator, GrimoireRecursiveReplacementMutator,
         GrimoireStringReplacementMutator, I2SRandReplace, Tokens,
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    prelude::BytesInput,
+    observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
+    stages::{mutational::{StdMutationalStage, MutatedTransform}, GeneralizationStage, TracingStage},
     state::{HasCorpus, HasMetadata, StdState},
     Error, Evaluator,
 };
@@ -438,12 +437,9 @@ fn fuzz(
     );
 
     let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &BytesInput| {
-            if input.generalized().is_some() {
-                input.generalized_to_bytes()
-            } else {
-                input.bytes().to_vec()
-            }
+        |input: &BytesInput, state: &StdState<_, _, _, _>| {
+            let (res, _) = input.clone().try_transform_into(state).unwrap();
+            res.bytes().to_vec()
         },
         &report_dir.join("queue"),
         &report_dir.join("crashes"),
