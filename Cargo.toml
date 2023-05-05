@@ -24,7 +24,6 @@ members = [
     "nautilus",
     "nautilus_mopt",
     "token_level",
-    "fuzzbench_util",
     "weighted",
 ]
 exclude = [
