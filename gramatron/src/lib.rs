@@ -356,7 +356,7 @@ fn fuzz(
     );
 
     let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &GramatronInput| {
+        |input: &GramatronInput, _state: &_| {
             let mut bytes = vec![];
             if !input.terminals().is_empty() {
                 input.unparse(&mut bytes);
