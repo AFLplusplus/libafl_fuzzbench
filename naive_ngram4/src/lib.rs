@@ -1,7 +1,4 @@
-//! A libfuzzer-like fuzzer with llmp-multithreading support and restarts
-//! The example harness is built for libpng.
-//! In this example, you will see the use of the `launcher` feature.
-//! The `launcher` will spawn new processes for each cpu core.
+//! A singlethreaded libfuzzer-like fuzzer that can auto-restart.
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -15,8 +12,9 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::{
     env,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::PathBuf,
+    process,
 };
 
 use libafl::{
@@ -25,30 +23,28 @@ use libafl::{
         os::dup2,
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider},
-        tuples::tuple_list,
+        tuples::{tuple_list, Merge},
+        AsSlice,
     },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
-    feedbacks::{
-        CrashFeedback, MaxMapFeedback, NautilusChunksMetadata, NautilusFeedback, TimeFeedback,
-    },
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{NautilusContext, NautilusGenerator},
-    inputs::{Input, NautilusInput},
+    inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
-    mutators::{
-        NautilusRandomMutator, NautilusRecursionMutator, NautilusSpliceMutator, StdMOptMutator,
-    },
+    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::mutational::StdMutationalStage,
+    stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
-
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer};
+
+#[cfg(target_os = "linux")]
+use libafl_targets::autotokens;
 
 /// The fuzzer main (as `no_mangle` C function)
 #[no_mangle]
@@ -68,29 +64,23 @@ pub fn libafl_main() {
                 .help("The directory to place finds in ('corpus')"),
         )
         .arg(
-            Arg::new("report")
-                .short('r')
-                .long("report")
-                .help("The directory to place dumped testcases ('corpus')"),
+            Arg::new("in")
+                .short('i')
+                .long("input")
+                .help("The directory to read initial inputs from ('seeds')"),
         )
         .arg(
-            Arg::new("grammar")
-                .short('g')
-                .long("grammar")
-                .help("The grammar model"),
+            Arg::new("tokens")
+                .short('x')
+                .long("tokens")
+                .help("A file to read tokens from, to be used during fuzzing"),
         )
         .arg(
             Arg::new("timeout")
                 .short('t')
                 .long("timeout")
                 .help("Timeout for each individual execution, in milliseconds")
-                .default_value("12000"),
-        )
-        .arg(
-            Arg::new("dump")
-                .short('d')
-                .long("dump")
-                .help("Dump serialized testcases to bytes"),
+                .default_value("1200"),
         )
         .arg(Arg::new("remaining"))
         .try_get_matches()
@@ -98,7 +88,7 @@ pub fn libafl_main() {
         Ok(res) => res,
         Err(err) => {
             println!(
-                "Syntax: {}, -o corpus_dir -g grammar.json\n{:?}",
+                "Syntax: {}, [-x dictionary] -o corpus_dir -i seed_dir\n{:?}",
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
@@ -113,21 +103,10 @@ pub fn libafl_main() {
         env::current_dir().unwrap().to_string_lossy().to_string()
     );
 
-    let grammar_path = PathBuf::from(
-        res.get_one::<String>("grammar")
-            .expect("The --grammar parameter is missing")
-            .to_string(),
-    );
-    if !grammar_path.is_file() {
-        println!("{:?} is not a valid file!", &grammar_path);
-        return;
-    }
-    let context = NautilusContext::from_file(64, grammar_path);
-
     if let Some(filenames) = res.get_many::<String>("remaining") {
         let filenames: Vec<&str> = filenames.map(String::as_str).collect();
         if !filenames.is_empty() {
-            run_testcases(context, &filenames);
+            run_testcases(&filenames);
             return;
         }
     }
@@ -145,24 +124,21 @@ pub fn libafl_main() {
             return;
         }
     }
-    let mut chunks = out_dir.clone();
-    chunks.push("chunks");
     let mut crashes = out_dir.clone();
     crashes.push("crashes");
     out_dir.push("queue");
 
-    let report_dir = PathBuf::from(
-        res.get_one::<String>("report")
-            .expect("The --report parameter is missing")
+    let in_dir = PathBuf::from(
+        res.get_one::<String>("in")
+            .expect("The --input parameter is missing")
             .to_string(),
     );
-    if fs::create_dir(&report_dir).is_err() {
-        println!("Report dir at {:?} already exists.", &report_dir);
-        if !report_dir.is_dir() {
-            println!("Report dir at {:?} is not a valid directory!", &report_dir);
-            return;
-        }
+    if !in_dir.is_dir() {
+        println!("In dir at {:?} is not a valid directory!", &in_dir);
+        return;
     }
+
+    let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
         res.get_one::<String>("timeout")
@@ -172,11 +148,10 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, chunks, report_dir, context, timeout)
-        .expect("An error occurred while fuzzing");
+    fuzz(out_dir, crashes, in_dir, tokens, timeout).expect("An error occurred while fuzzing");
 }
 
-fn run_testcases(context: NautilusContext, filenames: &[&str]) {
+fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
@@ -191,17 +166,11 @@ fn run_testcases(context: NautilusContext, filenames: &[&str]) {
     for fname in filenames {
         println!("Executing {}", fname);
 
-        let input = NautilusInput::from_file(fname).unwrap();
+        let mut file = File::open(fname).expect("No file found");
+        let mut buffer = vec![];
+        file.read_to_end(&mut buffer).expect("Buffer overflow");
 
-        let mut bytes = vec![];
-        input.unparse(&context, &mut bytes);
-        if *bytes.last().unwrap() != 0 {
-            bytes.push(0);
-        }
-        unsafe {
-            println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
-        }
-        libfuzzer_test_one_input(&bytes);
+        libfuzzer_test_one_input(&buffer);
     }
 }
 
@@ -209,9 +178,8 @@ fn run_testcases(context: NautilusContext, filenames: &[&str]) {
 fn fuzz(
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
-    chunks_dir: PathBuf,
-    report_dir: PathBuf,
-    context: NautilusContext,
+    seed_dir: PathBuf,
+    tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
     #[cfg(unix)]
@@ -249,6 +217,7 @@ fn fuzz(
     };
 
     // Create an observation channel using the coverage map
+    // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
     let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
     // Create an observation channel to keep track of the execution time
@@ -260,8 +229,7 @@ fn fuzz(
         // New maximization map feedback linked to the edges observer and the feedback state
         MaxMapFeedback::tracking(&edges_observer, true, false),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer),
-        NautilusFeedback::new(&context)
+        TimeFeedback::with_observer(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -285,15 +253,18 @@ fn fuzz(
         .unwrap()
     });
 
-    if state
-        .metadata_map()
-        .get::<NautilusChunksMetadata>()
-        .is_none()
-    {
-        state.add_metadata(NautilusChunksMetadata::new(
-            chunks_dir.display().to_string(),
-        ));
+    println!("Let's fuzz :)");
+
+    // The actual target run starts here.
+    // Call LLVMFUzzerInitialize() if present.
+    let args: Vec<String> = env::args().collect();
+    if libfuzzer_initialize(&args) == -1 {
+        println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
+
+    let mutator = StdMutationalStage::new(StdScheduledMutator::new(
+        havoc_mutations().merge(tokens_mutations()),
+    ));
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
@@ -302,10 +273,10 @@ fn fuzz(
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut bytes = vec![];
-    let mut harness = |input: &NautilusInput| {
-        input.unparse(&context, &mut bytes);
-        libfuzzer_test_one_input(&bytes);
+    let mut harness = |input: &BytesInput| {
+        let target = input.target_bytes();
+        let buf = target.as_slice();
+        libfuzzer_test_one_input(buf);
         ExitKind::Ok
     };
 
@@ -321,52 +292,35 @@ fn fuzz(
         timeout,
     );
 
-    // The actual target run starts here.
-    // Call LLVMFUzzerInitialize() if present.
-    let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
-        println!("Warning: LLVMFuzzerInitialize failed with -1")
-    }
+    // The order of the stages matter!
+    let mut stages = tuple_list!(mutator);
 
-    let mut generator = NautilusGenerator::new(&context);
+    // Read tokens
+    if state.metadata_map().get::<Tokens>().is_none() {
+        let mut toks = Tokens::default();
+        if let Some(tokenfile) = tokenfile {
+            toks.add_from_file(tokenfile)?;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            toks += autotokens()?;
+        }
+
+        if !toks.is_empty() {
+            state.add_metadata(toks);
+        }
+    }
 
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
         state
-            .generate_initial_inputs_forced(
-                &mut fuzzer,
-                &mut executor,
-                &mut generator,
-                &mut mgr,
-                4096,
-            )
-            .expect("Failed to generate the initial corpus");
+            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[seed_dir.clone()])
+            .unwrap_or_else(|_| {
+                println!("Failed to load initial corpus at {:?}", &seed_dir);
+                process::exit(0);
+            });
+        println!("We imported {} inputs from disk.", state.corpus().count());
     }
-
-    // Setup a basic mutator with a mutational stage
-    let mutator = StdMOptMutator::new(
-        &mut state,
-        tuple_list!(
-            NautilusRandomMutator::new(&context),
-            NautilusRecursionMutator::new(&context),
-            NautilusSpliceMutator::new(&context),
-        ),
-        3,
-        5,
-    )?;
-
-    let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &NautilusInput, _state: &_| {
-            let mut bytes = vec![];
-            input.unparse(&context, &mut bytes);
-            bytes
-        },
-        &report_dir.join("queue"),
-        &report_dir.join("crashes"),
-    )
-    .unwrap();
-
-    let mut stages = tuple_list!(fuzzbench, StdMutationalStage::new(mutator));
 
     // Remove target ouput (logs still survive)
     #[cfg(unix)]
@@ -377,5 +331,7 @@ fn fuzz(
     }
 
     fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+
+    // Never reached
     Ok(())
 }

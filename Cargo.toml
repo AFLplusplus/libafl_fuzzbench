@@ -10,10 +10,13 @@ members = [
     "text",
     "naive", # indexlenmin scheduler
     "naive_ctx",
+    "naive_ngram4",
+    "naive_ngram8",
     "fast",
     "fast_ctx",
     "coe",
     "explore",
+    "eco",
     "cmplog",
     "value_profile",
     "value_profile_cmplog",
