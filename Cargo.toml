@@ -16,6 +16,7 @@ members = [
     "fast_ctx",
     "coe",
     "explore",
+    "eco",
     "cmplog",
     "value_profile",
     "value_profile_cmplog",
