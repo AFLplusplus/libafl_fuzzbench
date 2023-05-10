@@ -1,19 +1,17 @@
 [package]
-name = "token_level"
+name = "naive_ngram4"
 version = "0.0.1"
 authors = ["Andrea Fioraldi <andreafioraldi@gmail.com>", "Dominik Maier <domenukk@gmail.com>"]
 edition = "2021"
 
 [dependencies]
-libafl = { path = "../LibAFL/libafl/", features = ["default", "nautilus"] }
+libafl = { path = "../LibAFL/libafl/" }
 libafl_targets = { path = "../LibAFL/libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer"] }
-serde_json = "1.0.68"
 # TODO Include it only when building cc
 libafl_cc = { path = "../LibAFL/libafl_cc/" }
+clap = { version = "4.0", features = ["default"] }
 nix = "0.26"
-clap = { version = "4.0", features = ["derive"] }
 mimalloc = { version = "*", default-features = false }
-postcard = { version = "0.7", features = ["alloc"] } # no_std compatible serde serialization fromat
 
 [lib]
 crate-type = ["staticlib"]

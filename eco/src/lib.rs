@@ -36,8 +36,8 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, TimeObserver},
-    schedulers::RandScheduler,
-    stages::StdMutationalStage,
+    schedulers::{ecofuzz::EcoScheduler, IndexesLenTimeMinimizerScheduler},
+    stages::{calibrate::CalibrationStage, power::EcoPowerMutationalStage},
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
@@ -223,11 +223,15 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
+    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, false);
+
+    let calibration = CalibrationStage::new(&map_feedback);
+
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::tracking(&edges_observer, true, false),
+        map_feedback,
         // Time feedback, this one does not need a feedback state
         TimeFeedback::with_observer(&time_observer)
     );
@@ -262,12 +266,12 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
-    let mutator = StdMutationalStage::new(StdScheduledMutator::new(
-        havoc_mutations().merge(tokens_mutations()),
-    ));
+    let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
+    let power = EcoPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = RandScheduler::new();
+    let scheduler =
+        IndexesLenTimeMinimizerScheduler::new(EcoScheduler::new(&mut state, &edges_observer));
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -293,7 +297,7 @@ fn fuzz(
     );
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(mutator);
+    let mut stages = tuple_list!(calibration, power);
 
     // Read tokens
     if state.metadata_map().get::<Tokens>().is_none() {

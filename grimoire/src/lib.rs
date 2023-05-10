@@ -6,7 +6,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use core::time::Duration;
 #[cfg(unix)]
 use nix::{self, unistd::dup};
@@ -32,26 +32,28 @@ use libafl::{
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
     feedback_or,
-    feedbacks::{CrashFeedback, MapFeedbackState, MaxMapFeedback, TimeFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::{Generator, NautilusContext, NautilusGenerator},
-    inputs::{GeneralizedInput, HasBytesVec, HasTargetBytes, Input},
+    inputs::{BytesInput, HasBytesVec, HasTargetBytes, Input},
     monitors::SimpleMonitor,
     mutators::{
         havoc_mutations, scheduled::StdScheduledMutator, GrimoireExtensionMutator,
         GrimoireRandomDeleteMutator, GrimoireRecursiveReplacementMutator,
         GrimoireStringReplacementMutator, I2SRandReplace, Tokens,
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
+    stages::{
+        mutational::{MutatedTransform, StdMutationalStage},
+        GeneralizationStage, TracingStage,
+    },
     state::{HasCorpus, HasMetadata, StdState},
     Error, Evaluator,
 };
 
 use libafl_targets::{
-    libfuzzer_initialize, libfuzzer_test_one_input, CmpLogObserver, CMPLOG_MAP, EDGES_MAP,
-    MAX_EDGES_NUM,
+    libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CmpLogObserver,
 };
 
 #[cfg(target_os = "linux")]
@@ -64,7 +66,7 @@ pub fn libafl_main() {
     // Needed only on no_std
     //RegistryBuilder::register::<Tokens>();
 
-    let res = match App::new(env!("CARGO_PKG_NAME"))
+    let res = match Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .author("AFLplusplus team")
         .about("LibAFL-based fuzzer for Fuzzbench")
@@ -72,29 +74,25 @@ pub fn libafl_main() {
             Arg::new("out")
                 .short('o')
                 .long("output")
-                .help("The directory to place finds in ('corpus')")
-                .takes_value(true),
+                .help("The directory to place finds in ('corpus')"),
         )
         .arg(
             Arg::new("report")
                 .short('r')
                 .long("report")
-                .help("The directory to place dumped testcases ('corpus')")
-                .takes_value(true),
+                .help("The directory to place dumped testcases ('corpus')"),
         )
         .arg(
             Arg::new("grammar")
                 .short('g')
                 .long("grammar")
-                .help("The grammar model")
-                .takes_value(true),
+                .help("The grammar model"),
         )
         .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
-                .help("A file to read tokens from, to be used during fuzzing")
-                .takes_value(true),
+                .help("A file to read tokens from, to be used during fuzzing"),
         )
         .arg(
             Arg::new("timeout")
@@ -107,10 +105,9 @@ pub fn libafl_main() {
             Arg::new("dump")
                 .short('d')
                 .long("dump")
-                .help("Dump serialized testcases to bytes")
-                .takes_value(false),
+                .help("Dump serialized testcases to bytes"),
         )
-        .arg(Arg::new("remaining").multiple_values(true))
+        .arg(Arg::new("remaining"))
         .try_get_matches()
     {
         Ok(res) => res,
@@ -120,7 +117,7 @@ pub fn libafl_main() {
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
-                err.info,
+                err,
             );
             return;
         }
@@ -131,8 +128,8 @@ pub fn libafl_main() {
         env::current_dir().unwrap().to_string_lossy().to_string()
     );
 
-    if let Some(filenames) = res.values_of("remaining") {
-        let filenames: Vec<&str> = filenames.collect();
+    if let Some(filenames) = res.get_many::<String>("remaining") {
+        let filenames: Vec<&str> = filenames.map(String::as_str).collect();
         if !filenames.is_empty() {
             run_testcases(&filenames);
             return;
@@ -140,7 +137,7 @@ pub fn libafl_main() {
     }
 
     let grammar_path = PathBuf::from(
-        res.value_of("grammar")
+        res.get_one::<String>("grammar")
             .expect("The --grammar parameter is missing")
             .to_string(),
     );
@@ -152,7 +149,7 @@ pub fn libafl_main() {
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
-        res.value_of("out")
+        res.get_one::<String>("out")
             .expect("The --output parameter is missing")
             .to_string(),
     );
@@ -171,7 +168,7 @@ pub fn libafl_main() {
     out_dir.push("queue");
 
     let report_dir = PathBuf::from(
-        res.value_of("report")
+        res.get_one::<String>("report")
             .expect("The --report parameter is missing")
             .to_string(),
     );
@@ -183,10 +180,10 @@ pub fn libafl_main() {
         }
     }
 
-    let tokens = res.value_of("tokens").map(PathBuf::from);
+    let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
-        res.value_of("timeout")
+        res.get_one::<String>("timeout")
             .unwrap()
             .to_string()
             .parse()
@@ -220,7 +217,7 @@ fn run_testcases(filenames: &[&str]) {
     for fname in filenames {
         println!("Executing {}", fname);
 
-        let input = GeneralizedInput::from_file(fname).expect("no file found");
+        let input = BytesInput::from_file(fname).expect("no file found");
 
         let target_bytes = input.target_bytes();
         let mut bytes = target_bytes.as_slice().to_vec();
@@ -272,7 +269,7 @@ fn fuzz(
         let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
         file.write_all(&bytes).unwrap();
 
-        let input = GeneralizedInput::new(bytes.clone());
+        let input = BytesInput::new(bytes.clone());
         initial_inputs.push(input);
     }
 
@@ -294,30 +291,24 @@ fn fuzz(
         },
     };
 
-    // Create an observation channel using the coverage map
-    let edges = unsafe { &mut EDGES_MAP[0..MAX_EDGES_NUM] };
-    let edges_observer = HitcountsMapObserver::new(StdMapObserver::new("edges", edges));
+    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    let cmplog = unsafe { &mut CMPLOG_MAP };
-    let cmplog_observer = CmpLogObserver::new("cmplog", cmplog, true);
-
-    // The state of the edges feedback.
-    let feedback_state = MapFeedbackState::with_observer(&edges_observer);
+    let cmplog_observer = CmpLogObserver::new("cmplog", true);
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
-    let feedback = feedback_or!(
+    let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new_tracking(&feedback_state, &edges_observer, true, true),
+        MaxMapFeedback::tracking(&edges_observer, true, true),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::new_with_observer(&time_observer)
+        TimeFeedback::with_observer(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
-    let objective = CrashFeedback::new();
+    let mut objective = CrashFeedback::new();
 
     // If not restarting, create a State from scratch
     let mut state = state.unwrap_or_else(|| {
@@ -331,12 +322,14 @@ fn fuzz(
             OnDiskCorpus::new(objective_dir).unwrap(),
             // States of the feedbacks.
             // They are the data related to the feedbacks that you want to persist in the State.
-            tuple_list!(feedback_state),
+            &mut feedback,
+            &mut objective,
         )
+        .unwrap()
     });
 
     // Read tokens
-    if state.metadata().get::<Tokens>().is_none() {
+    if state.metadata_map().get::<Tokens>().is_none() {
         let mut toks = Tokens::default();
         if let Some(tokenfile) = &tokenfile {
             toks.add_from_file(tokenfile)?;
@@ -360,7 +353,7 @@ fn fuzz(
     let generalization = GeneralizationStage::new(&edges_observer);
 
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut harness = |input: &GeneralizedInput| {
+    let mut harness = |input: &BytesInput| {
         /*use libafl::inputs::generalized::GeneralizedItem;
         if input.grimoire_mutated {
             if let Some(gen) = input.generalized() {
@@ -394,7 +387,7 @@ fn fuzz(
         timeout,
     );
 
-    let mut tracing_harness = |input: &GeneralizedInput| {
+    let mut tracing_harness = |input: &BytesInput| {
         let target_bytes = input.target_bytes();
         let bytes = target_bytes.as_slice();
         libfuzzer_test_one_input(&bytes);
@@ -446,16 +439,15 @@ fn fuzz(
         3,
     );
 
-    let fuzzbench = fuzzbench_util::FuzzbenchDumpStage::new(
-        |input: &GeneralizedInput| {
-            if input.generalized().is_some() {
-                input.generalized_to_bytes()
-            } else {
-                input.bytes().to_vec()
-            }
+    let fuzzbench = libafl::stages::DumpToDiskStage::new(
+        |input: &BytesInput, state: &StdState<_, _, _, _>| {
+            let (res, _) = input.clone().try_transform_into(state).unwrap();
+            res.bytes().to_vec()
         },
-        &report_dir,
-    );
+        &report_dir.join("queue"),
+        &report_dir.join("crashes"),
+    )
+    .unwrap();
 
     let mut stages = tuple_list!(
         fuzzbench,
@@ -463,7 +455,7 @@ fn fuzz(
         tracing,
         i2s,
         StdMutationalStage::new(mutator),
-        StdMutationalStage::new(grimoire_mutator)
+        StdMutationalStage::transforming(grimoire_mutator)
     );
 
     // Remove target ouput (logs still survive)
