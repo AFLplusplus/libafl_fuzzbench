@@ -37,7 +37,7 @@ use libafl::{
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, StdWeightedScheduler},
-    stages::power::StdPowerMutationalStage,
+    stages::{power::StdPowerMutationalStage, CalibrationStage},
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
@@ -220,6 +220,8 @@ fn fuzz(
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
     let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
+    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, false);
+    let calibration = CalibrationStage::new(&map_feedback);
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
@@ -227,7 +229,7 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::tracking(&edges_observer, true, false),
+        map_feedback,
         // Time feedback, this one does not need a feedback state
         TimeFeedback::with_observer(&time_observer)
     );
@@ -296,7 +298,7 @@ fn fuzz(
     );
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(power);
+    let mut stages = tuple_list!(calibration, power);
 
     // Read tokens
     if state.metadata_map().get::<Tokens>().is_none() {
