@@ -32,6 +32,7 @@ pub fn main() {
             .add_pass(LLVMPasses::AFLCoverage)
             .add_passes_arg("-ngram")
             .add_passes_arg("4")
+            .add_passes_linking_arg("-lm")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
