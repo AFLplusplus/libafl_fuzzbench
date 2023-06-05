@@ -31,6 +31,7 @@ pub fn main() {
             .link_staticlib(&dir, env!("CARGO_PKG_NAME"))
             .add_pass(LLVMPasses::AFLCoverage)
             .add_passes_arg("-ctx") // Context sensitive coverage
+            .add_passes_linking_arg("-lm")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
