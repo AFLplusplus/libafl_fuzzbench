@@ -34,7 +34,6 @@ use libafl::{
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
-    generators::{Generator, NautilusContext, NautilusGenerator},
     inputs::{BytesInput, HasBytesVec, HasTargetBytes, Input},
     monitors::SimpleMonitor,
     mutators::{
@@ -49,7 +48,7 @@ use libafl::{
         GeneralizationStage, TracingStage,
     },
     state::{HasCorpus, HasMetadata, StdState},
-    Error, Evaluator,
+    Error,
 };
 
 use libafl_targets::{
@@ -145,7 +144,6 @@ pub fn libafl_main() {
         println!("{:?} is not a valid file!", &grammar_path);
         return;
     }
-    let context = NautilusContext::from_file(64, grammar_path);
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
     let mut out_dir = PathBuf::from(
@@ -190,16 +188,8 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(
-        initial_dir,
-        out_dir,
-        crashes,
-        report_dir,
-        context,
-        tokens,
-        timeout,
-    )
-    .expect("An error occurred while fuzzing");
+    fuzz(initial_dir, out_dir, crashes, report_dir, tokens, timeout)
+        .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -237,7 +227,6 @@ fn fuzz(
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
     report_dir: PathBuf,
-    context: NautilusContext,
     tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -256,22 +245,6 @@ fn fuzz(
         #[cfg(windows)]
         println!("{}", s);
     });
-
-    let mut generator = NautilusGenerator::new(&context);
-
-    let mut initial_inputs = vec![];
-    let mut bytes = vec![];
-    for i in 0..4096 {
-        //for i in 0..1 {
-        let nautilus = generator.generate(&mut ()).unwrap();
-        nautilus.unparse(&context, &mut bytes);
-
-        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
-        file.write_all(&bytes).unwrap();
-
-        let input = BytesInput::new(bytes.clone());
-        initial_inputs.push(input);
-    }
 
     // We need a shared map to store our state before a crash.
     // This way, we are able to continue fuzzing afterwards.
@@ -416,11 +389,13 @@ fn fuzz(
 
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
-        for input in &initial_inputs {
-            fuzzer
-                .add_input(&mut state, &mut executor, &mut mgr, input.clone())
-                .unwrap();
-        }
+        state
+            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[initial_dir.clone()])
+            .unwrap_or_else(|_| {
+                println!("Failed to load initial corpus at {:?}", &initial_dir);
+                std::process::exit(0);
+            });
+        println!("We imported {} inputs from disk.", state.corpus().count());
     }
 
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
