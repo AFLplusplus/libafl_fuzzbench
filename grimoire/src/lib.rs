@@ -82,12 +82,6 @@ pub fn libafl_main() {
                 .help("The directory to place dumped testcases ('corpus')"),
         )
         .arg(
-            Arg::new("grammar")
-                .short('g')
-                .long("grammar")
-                .help("The grammar model"),
-        )
-        .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
@@ -112,7 +106,7 @@ pub fn libafl_main() {
         Ok(res) => res,
         Err(err) => {
             println!(
-                "Syntax: {}, [-x dictionary] -o corpus_dir -g grammar.json\n{:?}",
+                "Syntax: {}, [-x dictionary] -o corpus_dir\n{:?}",
                 env::current_exe()
                     .unwrap_or_else(|_| "fuzzer".into())
                     .to_string_lossy(),
@@ -133,16 +127,6 @@ pub fn libafl_main() {
             run_testcases(&filenames);
             return;
         }
-    }
-
-    let grammar_path = PathBuf::from(
-        res.get_one::<String>("grammar")
-            .expect("The --grammar parameter is missing")
-            .to_string(),
-    );
-    if !grammar_path.is_file() {
-        println!("{:?} is not a valid file!", &grammar_path);
-        return;
     }
 
     // For fuzzbench, crashes and finds are inside the same `corpus` directory, in the "queue" and "crashes" subdir.
