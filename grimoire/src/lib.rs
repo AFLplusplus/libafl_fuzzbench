@@ -160,8 +160,7 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(in_dir, out_dir, crashes, tokens, timeout)
-        .expect("An error occurred while fuzzing");
+    fuzz(in_dir, out_dir, crashes, tokens, timeout).expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
