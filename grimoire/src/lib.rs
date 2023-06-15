@@ -76,12 +76,6 @@ pub fn libafl_main() {
                 .help("The directory to place finds in ('corpus')"),
         )
         .arg(
-            Arg::new("report")
-                .short('r')
-                .long("report")
-                .help("The directory to place dumped testcases ('corpus')"),
-        )
-        .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
@@ -95,10 +89,10 @@ pub fn libafl_main() {
                 .default_value("12000"),
         )
         .arg(
-            Arg::new("dump")
-                .short('d')
-                .long("dump")
-                .help("Dump serialized testcases to bytes"),
+            Arg::new("in")
+                .short('i')
+                .long("input")
+                .help("The directory to read initial inputs from ('seeds')"),
         )
         .arg(Arg::new("remaining"))
         .try_get_matches()
@@ -142,24 +136,18 @@ pub fn libafl_main() {
             return;
         }
     }
-    let mut initial_dir = out_dir.clone();
-    initial_dir.push("initial");
-    fs::create_dir_all(&initial_dir).unwrap();
     let mut crashes = out_dir.clone();
     crashes.push("crashes");
     out_dir.push("queue");
 
-    let report_dir = PathBuf::from(
-        res.get_one::<String>("report")
-            .expect("The --report parameter is missing")
+    let in_dir = PathBuf::from(
+        res.get_one::<String>("in")
+            .expect("The --input parameter is missing")
             .to_string(),
     );
-    if fs::create_dir(&report_dir).is_err() {
-        println!("Report dir at {:?} already exists.", &report_dir);
-        if !report_dir.is_dir() {
-            println!("Report dir at {:?} is not a valid directory!", &report_dir);
-            return;
-        }
+    if !in_dir.is_dir() {
+        println!("In dir at {:?} is not a valid directory!", &in_dir);
+        return;
     }
 
     let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
@@ -172,7 +160,7 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(initial_dir, out_dir, crashes, report_dir, tokens, timeout)
+    fuzz(in_dir, out_dir, crashes, tokens, timeout)
         .expect("An error occurred while fuzzing");
 }
 
@@ -207,10 +195,9 @@ fn run_testcases(filenames: &[&str]) {
 
 /// The actual fuzzer
 fn fuzz(
-    initial_dir: PathBuf,
+    in_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
-    report_dir: PathBuf,
     tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -374,9 +361,9 @@ fn fuzz(
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
         state
-            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[initial_dir.clone()])
+            .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[in_dir.clone()])
             .unwrap_or_else(|_| {
-                println!("Failed to load initial corpus at {:?}", &initial_dir);
+                println!("Failed to load initial corpus at {:?}", &in_dir);
                 std::process::exit(0);
             });
         println!("We imported {} inputs from disk.", state.corpus().count());
@@ -398,18 +385,7 @@ fn fuzz(
         3,
     );
 
-    let fuzzbench = libafl::stages::DumpToDiskStage::new(
-        |input: &BytesInput, state: &StdState<_, _, _, _>| {
-            let (res, _) = input.clone().try_transform_into(state).unwrap();
-            res.bytes().to_vec()
-        },
-        &report_dir.join("queue"),
-        &report_dir.join("crashes"),
-    )
-    .unwrap();
-
     let mut stages = tuple_list!(
-        fuzzbench,
         generalization,
         tracing,
         i2s,
