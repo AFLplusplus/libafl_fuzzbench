@@ -12,7 +12,7 @@ libafl = { path = "../LibAFL/libafl/" }
 libafl_targets = { path = "../LibAFL/libafl_targets/", features = ["sancov_pcguard_hitcounts", "sancov_value_profile", "libfuzzer"] }
 # TODO Include it only when building cc
 libafl_cc = { path = "../LibAFL/libafl_cc/" }
-clap = { version = "4.0", features = ["default"] }
+clap = { version = "~4.2", features = ["default"] }
 nix = "0.26"
 mimalloc = { version = "*", default-features = false }
 
