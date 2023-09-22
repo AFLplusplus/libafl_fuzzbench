@@ -9,7 +9,7 @@ no_link_main = ["libafl_targets/libfuzzer_no_link_main"]
 
 [dependencies]
 libafl = { path = "../LibAFL/libafl/", features = ["default", "nautilus"] }
-libafl_targets = { path = "../LibAFL/libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer"] }
+libafl_targets = { path = "../LibAFL/libafl_targets/", features = ["sancov_pcguard_hitcounts", "sancov_cmplog", "libfuzzer"] }
 serde_json = "1.0.68"
 # TODO Include it only when building cc
 libafl_cc = { path = "../LibAFL/libafl_cc/" }
