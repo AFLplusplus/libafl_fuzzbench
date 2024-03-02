@@ -24,6 +24,7 @@ use libafl::{
         rands::StdRand,
         shmem::{ShMemProvider, StdShMemProvider},
         tuples::{tuple_list, Merge},
+        ownedref::OwnedMutSlice,
         AsSlice,
     },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
@@ -35,13 +36,13 @@ use libafl::{
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
-    observers::{HitcountsMapObserver, TimeObserver},
+    observers::{HitcountsMapObserver, TimeObserver, StdMapObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::StdMutationalStage,
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CtxObserver, edges_map_mut_ptr, EDGES_MAP_SIZE};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -218,10 +219,17 @@ fn fuzz(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
+    let edges_observer = HitcountsMapObserver::new(unsafe {
+        StdMapObserver::from_mut_slice(
+            "edges",
+            OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), EDGES_MAP_SIZE),
+        )
+    });
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
+
+    let ctx = CtxObserver::new();
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
@@ -284,7 +292,7 @@ fn fuzz(
     let mut executor = TimeoutExecutor::new(
         InProcessExecutor::new(
             &mut harness,
-            tuple_list!(edges_observer, time_observer),
+            tuple_list!(edges_observer, time_observer, ctx),
             &mut fuzzer,
             &mut state,
             &mut mgr,
