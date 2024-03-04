@@ -42,7 +42,7 @@ use libafl::{
     state::{HasCorpus, HasMetadata, StdState},
     Error,
 };
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, edges_map_mut_ptr, EDGES_MAP_SIZE, NgramObserver};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, edges_map_mut_ptr, EDGES_MAP_SIZE, NgramObserver, MAX_EDGES_NUM};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -216,13 +216,14 @@ fn fuzz(
             }
         },
     };
+    let map_sz: usize = core::cmp::max(EDGES_MAP_SIZE, unsafe {MAX_EDGES_NUM} );
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
     let edges_observer = HitcountsMapObserver::new(unsafe {
         StdMapObserver::from_mut_slice(
             "edges",
-            OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), EDGES_MAP_SIZE),
+            OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), map_sz),
         )
     });
 
@@ -334,8 +335,8 @@ fn fuzz(
     #[cfg(unix)]
     {
         let null_fd = file_null.as_raw_fd();
-        // dup2(null_fd, io::stdout().as_raw_fd())?;
-        // dup2(null_fd, io::stderr().as_raw_fd())?;
+        dup2(null_fd, io::stdout().as_raw_fd())?;
+        dup2(null_fd, io::stderr().as_raw_fd())?;
     }
 
     fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
