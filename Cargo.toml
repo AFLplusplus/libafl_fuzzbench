@@ -14,6 +14,8 @@ members = [
     "naive_ngram8",
     "fast",
     "fast_ctx",
+    "fast_ngram4",
+    "fast_value_profile",
     "coe",
     "explore",
     "eco",
