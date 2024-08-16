@@ -29,7 +29,6 @@ pub fn main() {
             .parse_args(&args)
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, env!("CARGO_PKG_NAME"))
-            .add_pass(LLVMPasses::AFLCoverage)
             .add_passes_arg("-ngram")
             .add_passes_arg("4")
             .add_passes_linking_arg("-lm")
