@@ -7,7 +7,6 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 
 use libafl::observers::CanTrack;
-use libafl::HasMetadata;
 use libafl_bolts::{
     current_nanos,
     os::dup2,
@@ -304,6 +303,21 @@ fn fuzz(
         .unwrap()
     });
 
+    let mut bytes = vec![];
+    let mut initial_inputs = vec![];
+    for i in 0..4096 {
+        let nautilus = generator.generate(&mut state).unwrap();
+        nautilus.unparse(&context, &mut bytes);
+
+        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
+        file.write_all(&bytes).unwrap();
+
+        let input = encoder_decoder
+            .encode(&bytes, &mut tokenizer)
+            .expect("encoding failed");
+        initial_inputs.push(input);
+    }
+
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(&edges_observer, QueueScheduler::new());
 
@@ -311,7 +325,6 @@ fn fuzz(
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut bytes = vec![];
     let mut harness = |input: &EncodedInput| {
         bytes.clear();
         encoder_decoder.decode(input, &mut bytes).unwrap();
@@ -338,18 +351,7 @@ fn fuzz(
 
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
-        let mut bytes = vec![];
-        let mut encoder_decoder = TokenInputEncoderDecoder::new();
-        for i in 0..4096 {
-            let nautilus = generator.generate(&mut state).unwrap();
-            nautilus.unparse(&context, &mut bytes);
-
-            let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
-            file.write_all(&bytes).unwrap();
-
-            let input = encoder_decoder
-                .encode(&bytes, &mut tokenizer)
-                .expect("encoding failed");
+        for input in initial_inputs {
             fuzzer
                 .add_input(&mut state, &mut executor, &mut mgr, input)
                 .unwrap();

@@ -6,7 +6,6 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 use libafl::observers::CanTrack;
-use libafl::HasMetadata;
 use libafl_bolts::{
     current_nanos,
     os::dup2,

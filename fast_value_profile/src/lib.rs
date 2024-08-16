@@ -41,7 +41,7 @@ use libafl::{
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, PowerQueueScheduler,
     },
-    stages::{calibrate::CalibrationStage, power::StdPowerMutationalStage, StdMutationalStage},
+    stages::{calibrate::CalibrationStage, power::StdPowerMutationalStage},
     state::{HasCorpus, StdState},
     Error,
 };
@@ -224,7 +224,7 @@ fn fuzz(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let mut edges_observer =
+    let edges_observer =
         HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
     let map_feedback = MaxMapFeedback::new(&edges_observer);
@@ -233,8 +233,8 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    let cmps = unsafe { &mut CMP_MAP };
-    let cmps_observer = unsafe { StdMapObserver::new("cmps", cmps) };
+    let cmps = core::ptr::addr_of_mut!(CMP_MAP);
+    let cmps_observer = unsafe { StdMapObserver::new("cmps", &mut *cmps) };
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR

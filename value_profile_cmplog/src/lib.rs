@@ -232,8 +232,8 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    let cmps = unsafe { &mut CMP_MAP };
-    let cmps_observer = unsafe { StdMapObserver::new("cmps", cmps) };
+    let cmps = core::ptr::addr_of_mut!(CMP_MAP);
+    let cmps_observer = unsafe { StdMapObserver::new("cmps", &mut *cmps) };
 
     let cmplog_observer = CmpLogObserver::new("cmplog", true);
 

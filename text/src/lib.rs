@@ -209,7 +209,7 @@ fn count_textual_inputs(dir: &Path) -> (usize, usize) {
 }
 
 fn check_if_textual(seeds_dir: &Path, tokenfile: &Option<PathBuf>) -> bool {
-    let (found, tot) = count_textual_inputs(&seeds_dir);
+    let (found, tot) = count_textual_inputs(seeds_dir);
     let is_text = found * 100 / tot > 90; // 90% of text inputs
     if let Some(tokenfile) = tokenfile {
         let toks = Tokens::from_file(tokenfile).unwrap();

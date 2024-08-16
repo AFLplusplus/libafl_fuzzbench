@@ -45,10 +45,7 @@ use libafl::{
     },
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{
-        mutational::{MutatedTransform, StdMutationalStage},
-        GeneralizationStage, TracingStage,
-    },
+    stages::{mutational::StdMutationalStage, GeneralizationStage, TracingStage},
     state::{HasCorpus, StdState},
     Error,
 };

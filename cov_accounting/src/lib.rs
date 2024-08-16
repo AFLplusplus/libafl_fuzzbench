@@ -276,7 +276,7 @@ fn fuzz(
         &edges_observer,
         &mut state,
         QueueScheduler::new(),
-        unsafe { &ACCOUNTING_MEMOP_MAP },
+        unsafe { &*core::ptr::addr_of_mut!(ACCOUNTING_MEMOP_MAP) },
     );
 
     // A fuzzer with feedbacks and a corpus scheduler
