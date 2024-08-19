@@ -33,6 +33,8 @@ pub fn main() {
             .add_link_arg("-lpython3.8")
             .add_link_arg("-Wl,--pop-state")
             .add_link_arg("-lutil")
+            .add_link_arg("-lexpat")
+            .add_link_arg("-lz")
             .run()
             .expect("Failed to run the wrapped compiler")
         {
