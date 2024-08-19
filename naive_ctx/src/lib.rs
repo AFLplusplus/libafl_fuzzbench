@@ -30,7 +30,7 @@ use std::{
 use libafl::{
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind},
+    executors::{inprocess::HookableInProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -43,7 +43,7 @@ use libafl::{
     state::{HasCorpus, StdState},
     Error,
 };
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CtxHook, EDGES_MAP_SIZE_IN_USE, MAX_EDGES_FOUND};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -217,7 +217,6 @@ fn fuzz(
             }
         },
     };
-
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
     let edges_observer =
@@ -282,9 +281,10 @@ fn fuzz(
         libfuzzer_test_one_input(buf);
         ExitKind::Ok
     };
-
+    let ctx_hook = CtxHook::new();
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = InProcessExecutor::with_timeout(
+    let mut executor = HookableInProcessExecutor::with_timeout_generic(
+        tuple_list!(ctx_hook),
         &mut harness,
         tuple_list!(edges_observer, time_observer),
         &mut fuzzer,
