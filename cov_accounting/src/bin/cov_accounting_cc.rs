@@ -1,6 +1,6 @@
+use libafl_cc::ToolWrapper;
 use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses};
 use std::env;
-
 const GRANULARITY: &str = "FUNC";
 
 pub fn main() {

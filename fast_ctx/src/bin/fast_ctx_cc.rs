@@ -1,6 +1,6 @@
+use libafl_cc::ToolWrapper;
 use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses};
 use std::env;
-
 pub fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
@@ -29,7 +29,6 @@ pub fn main() {
             .parse_args(&args)
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, env!("CARGO_PKG_NAME"))
-            .add_pass(LLVMPasses::AFLCoverage)
             .add_passes_arg("-ctx") // Context sensitive coverage
             .run()
             .expect("Failed to run the wrapped compiler")

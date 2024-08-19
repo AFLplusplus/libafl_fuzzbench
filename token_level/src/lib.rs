@@ -6,6 +6,15 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+use libafl::observers::CanTrack;
+use libafl_bolts::{
+    current_nanos,
+    os::dup2,
+    rands::StdRand,
+    shmem::{ShMemProvider, StdShMemProvider},
+    tuples::tuple_list,
+};
+
 use clap::{Arg, Command};
 use core::time::Duration;
 #[cfg(unix)]
@@ -20,16 +29,9 @@ use std::{
 };
 
 use libafl::{
-    bolts::{
-        current_nanos,
-        os::dup2,
-        rands::StdRand,
-        shmem::{ShMemProvider, StdShMemProvider},
-        tuples::tuple_list,
-    },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
+    executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -246,21 +248,6 @@ fn fuzz(
 
     let mut generator = NautilusGenerator::new(&context);
 
-    let mut initial_inputs = vec![];
-    let mut bytes = vec![];
-    for i in 0..4096 {
-        let nautilus = generator.generate(&mut ()).unwrap();
-        nautilus.unparse(&context, &mut bytes);
-
-        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
-        file.write_all(&bytes).unwrap();
-
-        let input = encoder_decoder
-            .encode(&bytes, &mut tokenizer)
-            .expect("encoding failed");
-        initial_inputs.push(input);
-    }
-
     // We need a shared map to store our state before a crash.
     // This way, we are able to continue fuzzing afterwards.
     let mut shmem_provider = StdShMemProvider::new()?;
@@ -280,7 +267,8 @@ fn fuzz(
     };
 
     // Create an observation channel using the coverage map
-    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
+    let edges_observer =
+        HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
@@ -289,9 +277,9 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::tracking(&edges_observer, true, false),
+        MaxMapFeedback::new(&edges_observer),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer)
+        TimeFeedback::new(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -315,14 +303,28 @@ fn fuzz(
         .unwrap()
     });
 
+    let mut bytes = vec![];
+    let mut initial_inputs = vec![];
+    for i in 0..4096 {
+        let nautilus = generator.generate(&mut state).unwrap();
+        nautilus.unparse(&context, &mut bytes);
+
+        let mut file = fs::File::create(&initial_dir.join(format!("id_{}", i))).unwrap();
+        file.write_all(&bytes).unwrap();
+
+        let input = encoder_decoder
+            .encode(&bytes, &mut tokenizer)
+            .expect("encoding failed");
+        initial_inputs.push(input);
+    }
+
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(&edges_observer, QueueScheduler::new());
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     // The wrapped harness function, calling out to the LLVM-style harness
-    let mut bytes = vec![];
     let mut harness = |input: &EncodedInput| {
         bytes.clear();
         encoder_decoder.decode(input, &mut bytes).unwrap();
@@ -331,16 +333,14 @@ fn fuzz(
     };
 
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut harness,
-            tuple_list!(edges_observer, time_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let mut executor = InProcessExecutor::with_timeout(
+        &mut harness,
+        tuple_list!(edges_observer, time_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         timeout,
-    );
+    )?;
 
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
@@ -351,9 +351,9 @@ fn fuzz(
 
     // In case the corpus is empty (on first run), reset
     if state.corpus().count() < 1 {
-        for input in &initial_inputs {
+        for input in initial_inputs {
             fuzzer
-                .add_input(&mut state, &mut executor, &mut mgr, input.clone())
+                .add_input(&mut state, &mut executor, &mut mgr, input)
                 .unwrap();
         }
     }

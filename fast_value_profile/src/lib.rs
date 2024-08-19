@@ -2,7 +2,6 @@
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-
 use libafl::observers::CanTrack;
 use libafl::HasMetadata;
 use libafl_bolts::{
@@ -39,8 +38,10 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
-    schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::StdMutationalStage,
+    schedulers::{
+        powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, PowerQueueScheduler,
+    },
+    stages::{calibrate::CalibrationStage, power::StdPowerMutationalStage},
     state::{HasCorpus, StdState},
     Error,
 };
@@ -226,6 +227,9 @@ fn fuzz(
     let edges_observer =
         HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
+    let map_feedback = MaxMapFeedback::new(&edges_observer);
+
+    let calibration = CalibrationStage::new(&map_feedback);
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
@@ -236,7 +240,7 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::new(&edges_observer),
+        map_feedback,
         // Cmp max feedback
         MaxMapFeedback::new(&cmps_observer),
         // Time feedback, this one does not need a feedback state
@@ -273,12 +277,15 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
-    let mutator = StdMutationalStage::new(StdScheduledMutator::new(
-        havoc_mutations().merge(tokens_mutations()),
-    ));
+    let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
+
+    let power = StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(&edges_observer, QueueScheduler::new());
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(
+        &edges_observer,
+        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::FAST),
+    );
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -302,7 +309,7 @@ fn fuzz(
     )?;
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(mutator);
+    let mut stages = tuple_list!(calibration, power);
 
     // Read tokens
     if state.metadata_map().get::<Tokens>().is_none() {

@@ -3,6 +3,17 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+use libafl::observers::CanTrack;
+use libafl::HasMetadata;
+use libafl_bolts::{
+    current_nanos,
+    os::dup2,
+    rands::StdRand,
+    shmem::{ShMemProvider, StdShMemProvider},
+    tuples::{tuple_list, Merge},
+    AsSlice,
+};
+
 use clap::{Arg, Command};
 use content_inspector::inspect;
 use core::time::Duration;
@@ -19,17 +30,9 @@ use std::{
 };
 
 use libafl::{
-    bolts::{
-        current_nanos,
-        os::dup2,
-        rands::StdRand,
-        shmem::{ShMemProvider, StdShMemProvider},
-        tuples::{tuple_list, Merge},
-        AsSlice,
-    },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
+    executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -52,7 +55,7 @@ use libafl::{
         calibrate::CalibrationStage, power::StdPowerMutationalStage, GeneralizationStage,
         StdMutationalStage, TracingStage,
     },
-    state::{HasCorpus, HasMetadata, StdState},
+    state::{HasCorpus, StdState},
     Error,
 };
 use libafl_targets::{
@@ -206,7 +209,7 @@ fn count_textual_inputs(dir: &Path) -> (usize, usize) {
 }
 
 fn check_if_textual(seeds_dir: &Path, tokenfile: &Option<PathBuf>) -> bool {
-    let (found, tot) = count_textual_inputs(&seeds_dir);
+    let (found, tot) = count_textual_inputs(seeds_dir);
     let is_text = found * 100 / tot > 90; // 90% of text inputs
     if let Some(tokenfile) = tokenfile {
         let toks = Tokens::from_file(tokenfile).unwrap();
@@ -290,14 +293,15 @@ fn fuzz_binary(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
+    let edges_observer =
+        HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
     let cmplog_observer = CmpLogObserver::new("cmplog", true);
 
-    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, false);
+    let map_feedback = MaxMapFeedback::new(&edges_observer);
 
     let calibration = CalibrationStage::new(&map_feedback);
 
@@ -307,7 +311,7 @@ fn fuzz_binary(
         // New maximization map feedback linked to the edges observer and the feedback state
         map_feedback,
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer)
+        TimeFeedback::new(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -354,11 +358,10 @@ fn fuzz_binary(
     let power = StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(PowerQueueScheduler::new(
-        &mut state,
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(
         &edges_observer,
-        PowerSchedule::FAST,
-    ));
+        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::FAST),
+    );
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -374,29 +377,25 @@ fn fuzz_binary(
     let mut tracing_harness = harness;
 
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut harness,
-            tuple_list!(edges_observer, time_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let mut executor = InProcessExecutor::with_timeout(
+        &mut harness,
+        tuple_list!(edges_observer, time_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         timeout,
-    );
+    )?;
 
     // Setup a tracing stage in which we log comparisons
-    let tracing = TracingStage::new(TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut tracing_harness,
-            tuple_list!(cmplog_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let tracing = TracingStage::new(InProcessExecutor::with_timeout(
+        &mut tracing_harness,
+        tuple_list!(cmplog_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         // Give it more time!
         timeout * 10,
-    ));
+    )?);
 
     // The order of the stages matter!
     let mut stages = tuple_list!(calibration, tracing, i2s, power);
@@ -486,14 +485,16 @@ fn fuzz_text(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
+    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") })
+        .track_indices()
+        .track_novelties();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
     let cmplog_observer = CmpLogObserver::new("cmplog", true);
 
-    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, true);
+    let map_feedback = MaxMapFeedback::new(&edges_observer);
 
     let calibration = CalibrationStage::new(&map_feedback);
 
@@ -503,7 +504,7 @@ fn fuzz_text(
         // New maximization map feedback linked to the edges observer and the feedback state
         map_feedback,
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer)
+        TimeFeedback::new(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -563,11 +564,10 @@ fn fuzz_text(
     let grimoire = StdMutationalStage::transforming(grimoire_mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(PowerQueueScheduler::new(
-        &mut state,
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(
         &edges_observer,
-        PowerSchedule::FAST,
-    ));
+        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::FAST),
+    );
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
@@ -584,29 +584,25 @@ fn fuzz_text(
     let generalization = GeneralizationStage::new(&edges_observer);
 
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut harness,
-            tuple_list!(edges_observer, time_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let mut executor = InProcessExecutor::with_timeout(
+        &mut harness,
+        tuple_list!(edges_observer, time_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         timeout,
-    );
+    )?;
 
     // Setup a tracing stage in which we log comparisons
-    let tracing = TracingStage::new(TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut tracing_harness,
-            tuple_list!(cmplog_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let tracing = TracingStage::new(InProcessExecutor::with_timeout(
+        &mut tracing_harness,
+        tuple_list!(cmplog_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         // Give it more time!
         timeout * 10,
-    ));
+    )?);
 
     // The order of the stages matter!
     let mut stages = tuple_list!(generalization, calibration, tracing, i2s, power, grimoire);

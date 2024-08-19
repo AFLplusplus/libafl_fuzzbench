@@ -2,6 +2,16 @@
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+use libafl::observers::CanTrack;
+use libafl::HasMetadata;
+use libafl_bolts::{
+    current_nanos,
+    os::dup2,
+    rands::StdRand,
+    shmem::{ShMemProvider, StdShMemProvider},
+    tuples::{tuple_list, Merge},
+    AsSlice,
+};
 
 use clap::{Arg, Command};
 use core::time::Duration;
@@ -18,31 +28,22 @@ use std::{
 };
 
 use libafl::{
-    bolts::{
-        current_nanos,
-        os::dup2,
-        rands::StdRand,
-        ownedref::OwnedMutSlice,
-        shmem::{ShMemProvider, StdShMemProvider},
-        tuples::{tuple_list, Merge},
-        AsSlice,
-    },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
+    executors::{inprocess::HookableInProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
-    observers::{HitcountsMapObserver, TimeObserver, StdMapObserver},
+    observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::StdMutationalStage,
-    state::{HasCorpus, HasMetadata, StdState},
+    state::{HasCorpus, StdState},
     Error,
 };
-use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, edges_map_mut_ptr, EDGES_MAP_SIZE, NgramObserver, MAX_EDGES_NUM};
+use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, NgramHook};
 
 #[cfg(target_os = "linux")]
 use libafl_targets::autotokens;
@@ -217,28 +218,21 @@ fn fuzz(
         },
     };
 
-    let map_sz: usize = core::cmp::max(EDGES_MAP_SIZE, unsafe {MAX_EDGES_NUM} );
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer = HitcountsMapObserver::new(unsafe {
-        StdMapObserver::from_mut_slice(
-            "edges",
-            OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), map_sz),
-        )
-    });
+    let edges_observer =
+        HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
-
-    let ngram = NgramObserver::new();
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::tracking(&edges_observer, true, false),
+        MaxMapFeedback::new(&edges_observer),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer)
+        TimeFeedback::new(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -276,7 +270,7 @@ fn fuzz(
     ));
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
+    let scheduler = IndexesLenTimeMinimizerScheduler::new(&edges_observer, QueueScheduler::new());
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -289,17 +283,17 @@ fn fuzz(
         ExitKind::Ok
     };
 
+    let ngram_hook = NgramHook::new();
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut harness,
-            tuple_list!(edges_observer, time_observer, ngram),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let mut executor = HookableInProcessExecutor::with_timeout_generic(
+        tuple_list!(ngram_hook),
+        &mut harness,
+        tuple_list!(edges_observer, time_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         timeout,
-    );
+    )?;
 
     // The order of the stages matter!
     let mut stages = tuple_list!(mutator);

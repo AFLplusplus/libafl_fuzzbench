@@ -2,6 +2,16 @@
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+use libafl::observers::CanTrack;
+use libafl::HasMetadata;
+use libafl_bolts::{
+    current_nanos,
+    os::dup2,
+    rands::StdRand,
+    shmem::{ShMemProvider, StdShMemProvider},
+    tuples::{tuple_list, Merge},
+    AsSlice,
+};
 
 use clap::{Arg, Command};
 use core::time::Duration;
@@ -18,17 +28,9 @@ use std::{
 };
 
 use libafl::{
-    bolts::{
-        current_nanos,
-        os::dup2,
-        rands::StdRand,
-        shmem::{ShMemProvider, StdShMemProvider},
-        tuples::{tuple_list, Merge},
-        AsSlice,
-    },
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
+    executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -38,7 +40,7 @@ use libafl::{
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{CoverageAccountingScheduler, QueueScheduler},
     stages::StdMutationalStage,
-    state::{HasCorpus, HasMetadata, StdState},
+    state::{HasCorpus, StdState},
     Error,
 };
 use libafl_targets::{
@@ -220,7 +222,8 @@ fn fuzz(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
+    let edges_observer =
+        HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") }).track_indices();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
@@ -229,9 +232,9 @@ fn fuzz(
     // This one is composed by two Feedbacks in OR
     let mut feedback = feedback_or!(
         // New maximization map feedback linked to the edges observer and the feedback state
-        MaxMapFeedback::tracking(&edges_observer, true, false),
+        MaxMapFeedback::new(&edges_observer),
         // Time feedback, this one does not need a feedback state
-        TimeFeedback::with_observer(&time_observer)
+        TimeFeedback::new(&time_observer)
     );
 
     // A feedback to choose if an input is a solution or not
@@ -269,9 +272,12 @@ fn fuzz(
     ));
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = CoverageAccountingScheduler::new(&mut state, QueueScheduler::new(), unsafe {
-        &ACCOUNTING_MEMOP_MAP
-    });
+    let scheduler = CoverageAccountingScheduler::new(
+        &edges_observer,
+        &mut state,
+        QueueScheduler::new(),
+        unsafe { &*core::ptr::addr_of_mut!(ACCOUNTING_MEMOP_MAP) },
+    );
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -285,16 +291,14 @@ fn fuzz(
     };
 
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-    let mut executor = TimeoutExecutor::new(
-        InProcessExecutor::new(
-            &mut harness,
-            tuple_list!(edges_observer, time_observer),
-            &mut fuzzer,
-            &mut state,
-            &mut mgr,
-        )?,
+    let mut executor = InProcessExecutor::with_timeout(
+        &mut harness,
+        tuple_list!(edges_observer, time_observer),
+        &mut fuzzer,
+        &mut state,
+        &mut mgr,
         timeout,
-    );
+    )?;
 
     // The order of the stages matter!
     let mut stages = tuple_list!(mutator);

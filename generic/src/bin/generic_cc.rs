@@ -1,6 +1,6 @@
+use libafl_cc::ToolWrapper;
 use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses};
 use std::env;
-
 pub fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
