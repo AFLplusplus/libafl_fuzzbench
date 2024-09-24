@@ -75,6 +75,12 @@ pub fn libafl_main() {
                 .help("The directory to place finds in ('corpus')"),
         )
         .arg(
+            Arg::new("report")
+                .short('r')
+                .long("report")
+                .help("The directory to place dumped testcases ('corpus')"),
+        )
+        .arg(
             Arg::new("tokens")
                 .short('x')
                 .long("tokens")
@@ -139,6 +145,19 @@ pub fn libafl_main() {
     crashes.push("crashes");
     out_dir.push("queue");
 
+    let report_dir = PathBuf::from(
+        res.get_one::<String>("report")
+            .expect("The --report parameter is missing")
+            .to_string(),
+    );
+    if fs::create_dir(&report_dir).is_err() {
+        println!("Report dir at {:?} already exists.", &report_dir);
+        if !report_dir.is_dir() {
+            println!("Report dir at {:?} is not a valid directory!", &report_dir);
+            return;
+        }
+    }
+
     let in_dir = PathBuf::from(
         res.get_one::<String>("in")
             .expect("The --input parameter is missing")
@@ -159,7 +178,7 @@ pub fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(in_dir, out_dir, crashes, tokens, timeout).expect("An error occurred while fuzzing");
+    fuzz(in_dir, out_dir, crashes, report_dir, tokens, timeout).expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -196,6 +215,7 @@ fn fuzz(
     in_dir: PathBuf,
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
+    report_dir: PathBuf,
     tokenfile: Option<PathBuf>,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -381,7 +401,19 @@ fn fuzz(
         3,
     );
 
+    let fuzzbench = libafl::stages::DumpToDiskStage::new(
+        |input: &BytesInput, state: &StdState<_, _, _, _>| {
+            let target_bytes = input.target_bytes();
+            let bytes = target_bytes.as_slice().to_vec();
+            bytes
+        },
+        &report_dir.join("queue"),
+        &report_dir.join("crashes"),
+    )
+    .unwrap();
+
     let mut stages = tuple_list!(
+        fuzzbench,
         generalization,
         tracing,
         i2s,
