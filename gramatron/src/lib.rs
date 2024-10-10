@@ -180,7 +180,7 @@ fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -207,7 +207,7 @@ fn run_testcases(filenames: &[&str]) {
         unsafe {
             println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
         }
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
     }
 }
 
@@ -302,7 +302,7 @@ fn fuzz(
             return ExitKind::Ok;
         }
         input.unparse(&mut bytes);
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
         ExitKind::Ok
     };
 
@@ -319,7 +319,7 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -353,7 +353,8 @@ fn fuzz(
             GramatronRecursionMutator::new()
         ),
         3,
-    );
+    )
+    .unwrap();
 
     let fuzzbench = libafl::stages::DumpToDiskStage::new(
         |input: &GramatronInput, _state: &_| {

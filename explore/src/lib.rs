@@ -36,7 +36,7 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
-    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+    mutators::{havoc_mutations::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, TimeObserver},
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, PowerQueueScheduler,
@@ -159,7 +159,7 @@ fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -174,7 +174,7 @@ fn run_testcases(filenames: &[&str]) {
         let mut buffer = vec![];
         file.read_to_end(&mut buffer).expect("Buffer overflow");
 
-        libfuzzer_test_one_input(&buffer);
+        unsafe { libfuzzer_test_one_input(&buffer) };
     }
 }
 
@@ -267,17 +267,18 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
     let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
-    let power = StdPowerMutationalStage::new(mutator);
+    let power: StdPowerMutationalStage<_, _, BytesInput, _, _> =
+        StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(
         &edges_observer,
-        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::EXPLORE),
+        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::explore()),
     );
 
     // A fuzzer with feedbacks and a corpus scheduler
@@ -287,7 +288,7 @@ fn fuzz(
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        libfuzzer_test_one_input(buf);
+        unsafe { libfuzzer_test_one_input(buf) };
         ExitKind::Ok
     };
 

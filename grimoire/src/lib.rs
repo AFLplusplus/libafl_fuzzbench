@@ -166,7 +166,7 @@ fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -187,7 +187,7 @@ fn run_testcases(filenames: &[&str]) {
         unsafe {
             println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
         }
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
     }
 }
 
@@ -315,7 +315,7 @@ fn fuzz(
         }*/
         let target_bytes = input.target_bytes();
         let bytes = target_bytes.as_slice();
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
         ExitKind::Ok
     };
 
@@ -332,7 +332,7 @@ fn fuzz(
     let mut tracing_harness = |input: &BytesInput| {
         let target_bytes = input.target_bytes();
         let bytes = target_bytes.as_slice();
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
         ExitKind::Ok
     };
 
@@ -350,7 +350,7 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -368,7 +368,7 @@ fn fuzz(
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     // Setup a mutational stage with a basic bytes mutator
-    let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations(), 2);
+    let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations(), 2).unwrap();
     let grimoire_mutator = StdScheduledMutator::with_max_stack_pow(
         tuple_list!(
             GrimoireExtensionMutator::new(),
@@ -379,7 +379,8 @@ fn fuzz(
             GrimoireRandomDeleteMutator::new(),
         ),
         3,
-    );
+    )
+    .unwrap();
 
     let mut stages = tuple_list!(
         generalization,

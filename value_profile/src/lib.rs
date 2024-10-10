@@ -37,7 +37,7 @@ use libafl::{
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
-    mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
+    mutators::{havoc_mutations::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::StdMutationalStage,
@@ -160,7 +160,7 @@ fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -175,7 +175,7 @@ fn run_testcases(filenames: &[&str]) {
         let mut buffer = vec![];
         file.read_to_end(&mut buffer).expect("Buffer overflow");
 
-        libfuzzer_test_one_input(&buffer);
+        unsafe { libfuzzer_test_one_input(&buffer) };
     }
 }
 
@@ -269,7 +269,7 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -287,7 +287,7 @@ fn fuzz(
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        libfuzzer_test_one_input(buf);
+        unsafe { libfuzzer_test_one_input(buf) };
         ExitKind::Ok
     };
 

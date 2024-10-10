@@ -37,7 +37,7 @@ use libafl::{
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
     mutators::{
-        scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
+        havoc_mutations::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
     observers::{HitcountsMapObserver, TimeObserver},
@@ -167,7 +167,7 @@ fn run_testcases(filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -182,7 +182,7 @@ fn run_testcases(filenames: &[&str]) {
         let mut buffer = vec![];
         file.read_to_end(&mut buffer).expect("Buffer overflow");
 
-        libfuzzer_test_one_input(&buffer);
+        unsafe { libfuzzer_test_one_input(&buffer) };
     }
 }
 
@@ -277,7 +277,7 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -285,19 +285,20 @@ fn fuzz(
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     // Setup a MOPT mutator
-    let mutator = StdMOptMutator::new(
+    let mutator = StdMOptMutator::new::<BytesInput, _>(
         &mut state,
         havoc_mutations().merge(tokens_mutations()),
         7,
         5,
     )?;
 
-    let power = StdPowerMutationalStage::new(mutator);
+    let power: StdPowerMutationalStage<_, _, BytesInput, _, _> =
+        StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
     let scheduler = IndexesLenTimeMinimizerScheduler::new(
         &edges_observer,
-        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::FAST),
+        PowerQueueScheduler::new(&mut state, &edges_observer, PowerSchedule::fast()),
     );
 
     // A fuzzer with feedbacks and a corpus scheduler
@@ -307,7 +308,7 @@ fn fuzz(
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        libfuzzer_test_one_input(buf);
+        unsafe { libfuzzer_test_one_input(buf) };
         ExitKind::Ok
     };
 

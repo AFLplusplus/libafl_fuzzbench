@@ -5,8 +5,8 @@
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
-use libafl::observers::CanTrack;
 use libafl::HasMetadata;
+use libafl::{inputs::BytesInput, observers::CanTrack};
 use libafl_bolts::{
     current_nanos,
     os::dup2,
@@ -182,7 +182,7 @@ fn run_testcases(context: NautilusContext, filenames: &[&str]) {
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -203,7 +203,7 @@ fn run_testcases(context: NautilusContext, filenames: &[&str]) {
         unsafe {
             println!("Testcase: {}", std::str::from_utf8_unchecked(&bytes));
         }
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
     }
 }
 
@@ -308,7 +308,7 @@ fn fuzz(
     let mut bytes = vec![];
     let mut harness = |input: &NautilusInput| {
         input.unparse(&context, &mut bytes);
-        libfuzzer_test_one_input(&bytes);
+        unsafe { libfuzzer_test_one_input(&bytes) };
         ExitKind::Ok
     };
 
@@ -325,7 +325,7 @@ fn fuzz(
     // The actual target run starts here.
     // Call LLVMFUzzerInitialize() if present.
     let args: Vec<String> = env::args().collect();
-    if libfuzzer_initialize(&args) == -1 {
+    if unsafe { libfuzzer_initialize(&args) } == -1 {
         println!("Warning: LLVMFuzzerInitialize failed with -1")
     }
 
@@ -345,7 +345,7 @@ fn fuzz(
     }
 
     // Setup a basic mutator with a mutational stage
-    let mutator = StdMOptMutator::new(
+    let mutator = StdMOptMutator::new::<BytesInput, _>(
         &mut state,
         tuple_list!(
             NautilusRandomMutator::new(&context),
